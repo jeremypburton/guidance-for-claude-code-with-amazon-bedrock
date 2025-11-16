@@ -31,6 +31,7 @@ import requests
 from botocore import UNSIGNED
 from botocore.config import Config
 
+
 # No longer using file locks - using port-based locking instead
 
 __version__ = "1.0.0"
@@ -61,6 +62,14 @@ PROVIDER_CONFIGS = {
         "response_type": "code",
         "response_mode": "query",
     },
+    "jumpcloud": {
+        "name": "JumpCloud",
+        "authorize_endpoint": "/oauth2/auth",
+        "token_endpoint": "/oauth2/token",
+        "scopes": "openid profile email",
+        "response_type": "code",
+        "response_mode": "query",
+    },
     "cognito": {
         "name": "AWS Cognito User Pool",
         "authorize_endpoint": "/oauth2/authorize",
@@ -84,7 +93,6 @@ class MultiProviderAuth:
 
         # Determine provider type from domain
         self.provider_type = self._determine_provider_type()
-
         # Fail clearly if provider type is unknown
         if self.provider_type not in PROVIDER_CONFIGS:
             raise ValueError(
@@ -191,7 +199,7 @@ class MultiProviderAuth:
             # Fail with clear error for unknown providers
             raise ValueError(
                 "Unable to auto-detect provider type for empty domain. "
-                "Known providers: Okta, Auth0, Microsoft/Azure, AWS Cognito User Pool. "
+                "Known providers: Okta, Auth0, Microsoft/Azure, JumpCloud AWS Cognito User Pool. "
                 "Please check your provider domain configuration."
             )
 
@@ -206,7 +214,7 @@ class MultiProviderAuth:
                 # Fail with clear error for unknown providers
                 raise ValueError(
                     f"Unable to auto-detect provider type for domain '{domain}'. "
-                    f"Known providers: Okta, Auth0, Microsoft/Azure, AWS Cognito User Pool. "
+                    f"Known providers: Okta, Auth0, Microsoft/Azure, JumpCloud, AWS Cognito User Pool. "
                     f"Please check your provider domain configuration."
                 )
 
@@ -222,6 +230,8 @@ class MultiProviderAuth:
                 return "azure"
             elif hostname_lower.endswith(".windows.net") or hostname_lower == "windows.net":
                 return "azure"
+            elif hostname_lower.endswith(".jumpcloud.com") or hostname_lower == "jumpcloud.com":
+                return "jumpcloud"
             elif hostname_lower.endswith(".amazoncognito.com") or hostname_lower == "amazoncognito.com":
                 # Cognito User Pool domain format: my-domain.auth.{region}.amazoncognito.com
                 return "cognito"
@@ -229,7 +239,7 @@ class MultiProviderAuth:
                 # Fail with clear error for unknown providers
                 raise ValueError(
                     f"Unable to auto-detect provider type for domain '{domain}'. "
-                    f"Known providers: Okta, Auth0, Microsoft/Azure, AWS Cognito User Pool. "
+                    f"Known providers: Okta, Auth0, Microsoft/Azure, JumpCloud, AWS Cognito User Pool. "
                     f"Please check your provider domain configuration."
                 )
         except ValueError:

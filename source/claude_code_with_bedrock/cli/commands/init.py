@@ -280,6 +280,8 @@ class InitCommand(Command):
                     # Using endswith with leading dot prevents bypass attacks
                     if hostname_lower.endswith(".okta.com") or hostname_lower == "okta.com":
                         provider_type = "okta"
+                    if hostname_lower.endswith(".jumpcloud.com") or hostname_lower == "jumpcloud.com":
+                        provider_type = "jumpcloud"
                     elif hostname_lower.endswith(".auth0.com") or hostname_lower == "auth0.com":
                         provider_type = "auth0"
                     elif hostname_lower.endswith(".microsoftonline.com") or hostname_lower == "microsoftonline.com":

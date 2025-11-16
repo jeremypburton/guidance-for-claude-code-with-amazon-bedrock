@@ -294,6 +294,7 @@ class DeployCommand(Command):
                 # Select template based on provider type
                 provider_type = profile.provider_type or "okta"
                 template_map = {
+                    "jumpcloud": "bedrock-auth-jumpcloud.yaml",
                     "okta": "bedrock-auth-okta.yaml",
                     "auth0": "bedrock-auth-auth0.yaml",
                     "azure": "bedrock-auth-azure.yaml",
@@ -320,6 +321,13 @@ class DeployCommand(Command):
                         [
                             f"OktaDomain={profile.provider_domain}",
                             f"OktaClientId={profile.client_id}",
+                        ]
+                    )
+                elif provider_type == "jumpcloud":
+                    params.extend(
+                        [
+                            f"JumpCloudDomain={profile.provider_domain}",
+                            f"JumpCloudClientId={profile.client_id}",
                         ]
                     )
                 elif provider_type == "auth0":
