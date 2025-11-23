@@ -19,7 +19,7 @@ Parameters:
   JumpCloudClientId:
     Type: String
     Description: Auth0 application client ID
-    AllowedPattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' #018842b1-a6cb-4315-8832-0bac7c4c5ca7
+    AllowedPattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
     ConstraintDescription: Must be a valid JumpCloud client ID
 
   IdentityPoolName:
@@ -62,7 +62,7 @@ Resources:
   JumpCloudOIDCProvider:
     Type: AWS::IAM::OIDCProvider
     Properties:
-      Url: !Sub 'https://${JumpCloudDomain}'
+      Url: !Sub 'https://${JumpCloudDomain}/'
       ClientIdList:
         - !Ref JumpCloudClientId
 #      ThumbprintList:
@@ -133,8 +133,7 @@ Resources:
               - 'bedrock:GetFoundationModelAvailability'
               - 'bedrock:ListInferenceProfiles'
               - 'bedrock:GetInferenceProfile'
-            Resource:
-              - 'arn:aws:bedrock:::foundation-model/*'
+            Resource: '*'
           - !If
             - MonitoringEnabled
             - Sid: AllowCloudWatchMetrics
@@ -169,6 +168,11 @@ Resources:
             Action:
               - 'sts:AssumeRoleWithWebIdentity'
               - 'sts:TagSession'
+            Condition:
+              StringEquals:
+                # CloudFormation limitation: IAM policy condition keys cannot use intrinsic functions
+                # Since JumpCloudDomain is constrained to 'oauth.id.jumpcloud.com', using literal value
+                'oauth.id.jumpcloud.com/:aud': !Ref JumpCloudClientId
       ManagedPolicyArns:
         - !Ref BedrockAccessPolicy
       Tags:
