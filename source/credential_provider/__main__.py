@@ -84,7 +84,7 @@ PROVIDER_CONFIGS = {
 class MultiProviderAuth:
     def __init__(self, profile=None):
         # Load configuration from environment or config file
-        self.profile = profile or "default"
+        self.profile = profile or "ClaudeCode"
 
         # Debug mode - set before loading config since _load_config may use _debug_print
         self.debug = os.getenv("COGNITO_AUTH_DEBUG", "").lower() in ("1", "true", "yes")
@@ -114,11 +114,24 @@ class MultiProviderAuth:
             print(f"Debug: {message}", file=sys.stderr)
 
     def _load_config(self):
-        """Load configuration from ~/claude-code-with-bedrock/config.json"""
-        config_path = Path.home() / "claude-code-with-bedrock" / "config.json"
+        """Load configuration from config.json.
+
+        Priority:
+        1. Same directory as the binary (for testing dist/ packages)
+        2. ~/claude-code-with-bedrock/config.json (for installed packages)
+        """
+        # Try same directory as binary first (for testing)
+        binary_dir = Path(__file__).parent if not getattr(sys, "frozen", False) else Path(sys.executable).parent
+        config_path = binary_dir / "config.json"
+
+        # Fall back to installed location
+        if not config_path.exists():
+            config_path = Path.home() / "claude-code-with-bedrock" / "config.json"
 
         if not config_path.exists():
-            raise ValueError(f"Configuration file not found: {config_path}")
+            raise ValueError(
+                f"Configuration file not found in {binary_dir} or {Path.home() / 'claude-code-with-bedrock'}"
+            )
 
         with open(config_path) as f:
             file_config = json.load(f)
@@ -136,7 +149,8 @@ class MultiProviderAuth:
             profile_config["client_id"] = profile_config.get("client_id", profile_config.get("okta_client_id"))
 
             # Handle both identity_pool_id and identity_pool_name for compatibility
-            if "identity_pool_name" in profile_config:
+            # BUT: Don't convert identity_pool_name if federated_role_arn is present (Direct STS mode)
+            if "identity_pool_name" in profile_config and "federated_role_arn" not in profile_config:
                 profile_config["identity_pool_id"] = profile_config["identity_pool_name"]
 
             profile_config["credential_storage"] = profile_config.get("credential_storage", "session")
@@ -246,7 +260,7 @@ class MultiProviderAuth:
             raise
         except Exception as e:
             # Fail with clear error for unknown providers
-            raise ValueError(f"Unable to auto-detect provider type for domain '{domain}': {e}")
+            raise ValueError(f"Unable to auto-detect provider type for domain '{domain}': {e}") from e
 
     def _init_credential_storage(self):
         """Initialize secure credential storage"""
@@ -373,7 +387,7 @@ class MultiProviderAuth:
                     )
             except Exception as e:
                 self._debug_print(f"Error saving credentials to keyring: {e}")
-                raise Exception(f"Failed to save credentials to keyring: {str(e)}")
+                raise Exception(f"Failed to save credentials to keyring: {str(e)}") from e
         else:
             # Session storage uses ~/.aws/credentials file
             self.save_to_credentials_file(credentials, self.profile)
@@ -615,7 +629,7 @@ class MultiProviderAuth:
                     pass
                 raise
         except Exception as e:
-            raise Exception(f"Failed to save credentials to file: {str(e)}")
+            raise Exception(f"Failed to save credentials to file: {str(e)}") from e
 
     def read_from_credentials_file(self, profile="ClaudeCode"):
         """Read credentials from ~/.aws/credentials file
@@ -983,8 +997,8 @@ class MultiProviderAuth:
                     f"Authentication failed - cached credentials were invalid and have been cleared.\n"
                     f"Please try again to re-authenticate.\n"
                     f"Original error: {error_str}"
-                )
-            raise Exception(f"Failed to get AWS credentials via Direct STS: {str(e)}")
+                ) from e
+            raise Exception(f"Failed to get AWS credentials via Direct STS: {str(e)}") from None
 
     def get_aws_credentials_cognito(self, id_token, token_claims):
         """Exchange OIDC token for AWS credentials via Cognito Identity Pool"""
@@ -1118,8 +1132,8 @@ class MultiProviderAuth:
                     f"Authentication failed - cached credentials were invalid and have been cleared.\n"
                     f"Please try again to re-authenticate.\n"
                     f"Original error: {error_str}"
-                )
-            raise Exception(f"Failed to get AWS credentials: {str(e)}")
+                ) from e
+            raise Exception(f"Failed to get AWS credentials: {str(e)}") from None
 
     def _wait_for_auth_completion(self, timeout=60):
         """Wait for another process to complete authentication using port-based detection"""
@@ -1149,7 +1163,7 @@ class MultiProviderAuth:
             finally:
                 try:
                     test_socket.close()
-                except:
+                except Exception:
                     pass
 
         return None
@@ -1306,7 +1320,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="AWS credential provider for OIDC + Cognito Identity Pool")
-    parser.add_argument("--profile", "-p", default="ClaudeCode", help="Configuration profile to use")
+    # Check environment variable first, then use default
+    default_profile = os.getenv("CCWB_PROFILE", "ClaudeCode")
+    parser.add_argument("--profile", "-p", default=default_profile, help="Configuration profile to use")
     parser.add_argument("--version", "-v", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--get-monitoring-token", action="store_true", help="Get cached monitoring token instead of AWS credentials"
