@@ -148,18 +148,14 @@ class DeployCommand(Command):
             else:
                 console.print(f"[red]Unknown stack: {stack_arg}[/red]")
                 console.print(
-                    "Valid stacks: auth, distribution, networking, monitoring, dashboard, analytics, quota, codebuild"
+                    "Valid stacks: auth, distribution, networking, monitoring, dashboard, analytics, quota, codebuild\n"
                 )
+                console.print("[dim]Tip: Use 'ccwb deploy' without arguments to deploy all enabled stacks.[/dim]")
+                console.print("[dim]Use 'ccwb deploy quota' for quota-specific updates or late enablement.[/dim]")
                 return 1
         else:
             # Deploy all configured stacks in dependency order
             stacks_to_deploy.append(("auth", "Authentication Stack (Cognito + IAM)"))
-
-            # Deploy networking first if needed (required by landing-page distribution and monitoring)
-            if profile.monitoring_enabled or (
-                profile.enable_distribution and profile.distribution_type == "landing-page"
-            ):
-                stacks_to_deploy.append(("networking", "VPC Networking for OTEL Collector"))
 
             # Deploy distribution after networking if it's landing-page type
             if profile.enable_distribution:
@@ -167,6 +163,10 @@ class DeployCommand(Command):
 
             # Deploy remaining monitoring stacks
             if profile.monitoring_enabled:
+                vpc_config = profile.monitoring_config or {}
+                if vpc_config.get("create_vpc", True):
+                    stacks_to_deploy.append(("networking", "VPC Networking for OTEL Collector"))
+                stacks_to_deploy.append(("s3bucket", "S3 Bucket"))
                 stacks_to_deploy.append(("monitoring", "OpenTelemetry Collector"))
                 stacks_to_deploy.append(("dashboard", "CloudWatch Dashboard"))
                 # Check if analytics is enabled (default to True for backward compatibility)
@@ -571,6 +571,7 @@ class DeployCommand(Command):
                 template = project_root / "deployment" / "infrastructure" / "networking.yaml"
                 stack_name = profile.stack_names.get("networking", f"{profile.identity_pool_name}-networking")
                 vpc_config = profile.monitoring_config or {}
+
                 params = [
                     f"VpcCidr={vpc_config.get('vpc_cidr', '10.0.0.0/16')}",
                     f"PublicSubnet1Cidr={vpc_config.get('subnet1_cidr', '10.0.1.0/24')}",
@@ -580,27 +581,38 @@ class DeployCommand(Command):
                     template, stack_name, params, task_description="Deploying networking infrastructure..."
                 )
 
+            elif stack_type == "s3bucket":
+                template = project_root / "deployment" / "infrastructure" / "s3bucket.yaml"
+                stack_name = profile.stack_names.get("networking", f"{profile.identity_pool_name}-s3bucket")
+                params = []
+                return deploy_with_cf(template, stack_name, params, task_description="Deploying S3 Bucket...")
             elif stack_type == "monitoring":
                 # Ensure ECS service linked role exists before deploying
                 self._ensure_ecs_service_linked_role(console)
 
                 template = project_root / "deployment" / "infrastructure" / "otel-collector.yaml"
                 stack_name = profile.stack_names.get("monitoring", f"{profile.identity_pool_name}-otel-collector")
-
-                # Get VPC outputs from networking stack
-                networking_stack_name = profile.stack_names.get(
-                    "networking", f"{profile.identity_pool_name}-networking"
-                )
-                networking_outputs = get_stack_outputs(networking_stack_name, profile.aws_region)
-
                 params = []
-                if networking_outputs:
-                    vpc_id = networking_outputs.get("VpcId", "")
-                    subnet_ids = networking_outputs.get("SubnetIds", "")
-                    if vpc_id:
-                        params.append(f"VpcId={vpc_id}")
-                    if subnet_ids:
-                        params.append(f"SubnetIds={subnet_ids}")
+                vpc_config = profile.monitoring_config or {}
+
+                if not vpc_config.get("create_vpc", True):
+                    params.append(f"VpcId={vpc_config.get('vpc_id', '')}")
+                    subnet_ids = ",".join(vpc_config.get("subnet_ids", []))
+                    params.append(f"SubnetIds={subnet_ids}")
+                else:
+                    # Get VPC outputs from networking stack
+                    networking_stack_name = profile.stack_names.get(
+                        "networking", f"{profile.identity_pool_name}-networking"
+                    )
+                    networking_outputs = get_stack_outputs(networking_stack_name, profile.aws_region)
+
+                    if networking_outputs:
+                        vpc_id = networking_outputs.get("VpcId", "")
+                        subnet_ids = networking_outputs.get("SubnetIds", "")
+                        if vpc_id:
+                            params.append(f"VpcId={vpc_id}")
+                        if subnet_ids:
+                            params.append(f"SubnetIds={subnet_ids}")
 
                 # Add HTTPS domain parameters if configured
                 monitoring_config = getattr(profile, "monitoring_config", {})
@@ -608,6 +620,7 @@ class DeployCommand(Command):
                     params.append(f"CustomDomainName={monitoring_config['custom_domain']}")
                     params.append(f"HostedZoneId={monitoring_config['hosted_zone_id']}")
 
+                console.print(f"[dim]Using parameters: {params}[/dim]")
                 return deploy_with_cf(
                     template, stack_name, params, task_description="Deploying monitoring collector..."
                 )
@@ -617,12 +630,10 @@ class DeployCommand(Command):
                 stack_name = profile.stack_names.get("dashboard", f"{profile.identity_pool_name}-dashboard")
 
                 # Get S3 bucket from networking stack for packaging
-                networking_stack_name = profile.stack_names.get(
-                    "networking", f"{profile.identity_pool_name}-networking"
-                )
-                networking_outputs = get_stack_outputs(networking_stack_name, profile.aws_region)
+                s3_stack_name = profile.stack_names.get("s3", f"{profile.identity_pool_name}-s3bucket")
+                s3_outputs = get_stack_outputs(s3_stack_name, profile.aws_region)
 
-                if not networking_outputs or not networking_outputs.get("CfnArtifactsBucket"):
+                if not s3_outputs or not s3_outputs.get("CfnArtifactsBucket"):
                     console.print("[red]Error: S3 bucket for packaging not found[/red]")
                     console.print(
                         "[yellow]The networking stack must be deployed first with the artifacts bucket.[/yellow]"
@@ -630,7 +641,7 @@ class DeployCommand(Command):
                     console.print("Run: [cyan]ccwb deploy networking[/cyan]")
                     return 1
 
-                s3_bucket = networking_outputs["CfnArtifactsBucket"]
+                s3_bucket = s3_outputs["CfnArtifactsBucket"]
 
                 # Package the template using AWS CLI (simple and reliable!)
                 task = progress.add_task("Packaging dashboard Lambda functions...", total=None)
@@ -721,17 +732,35 @@ class DeployCommand(Command):
                 s3_bucket = networking_outputs["CfnArtifactsBucket"]
 
                 # Build parameters
-                monthly_limit = getattr(profile, "monthly_token_limit", 300000000)
+                monthly_limit = getattr(profile, "monthly_token_limit", 225000000)
+                daily_limit = getattr(profile, "daily_token_limit", None)
+                daily_enforcement = getattr(profile, "daily_enforcement_mode", "alert")
+                monthly_enforcement = getattr(profile, "monthly_enforcement_mode", "block")
+                warning_80 = getattr(profile, "warning_threshold_80", int(monthly_limit * 0.8))
+                warning_90 = getattr(profile, "warning_threshold_90", int(monthly_limit * 0.9))
+
                 metrics_aggregator_role = dashboard_outputs.get(
                     "MetricsAggregatorRoleName", "claude-code-auth-dashboard-MetricsAggregatorRole-*"
                 )
+
+                # Get OIDC configuration for JWT authentication
+                oidc_issuer_url = profile.provider_domain
+                # Ensure issuer URL has https:// prefix
+                if oidc_issuer_url and not oidc_issuer_url.startswith(("http://", "https://")):
+                    oidc_issuer_url = f"https://{oidc_issuer_url}"
+                oidc_client_id = profile.client_id
 
                 params = [
                     f"MonthlyTokenLimit={monthly_limit}",
                     f"MetricsTableArn={dashboard_outputs['MetricsTableArn']}",
                     f"MetricsAggregatorRoleName={metrics_aggregator_role}",
-                    f"WarningThreshold80={int(monthly_limit * 0.8)}",
-                    f"WarningThreshold90={int(monthly_limit * 0.9)}",
+                    f"WarningThreshold80={warning_80}",
+                    f"WarningThreshold90={warning_90}",
+                    f"DailyTokenLimit={daily_limit or 0}",
+                    f"DailyEnforcementMode={daily_enforcement}",
+                    f"MonthlyEnforcementMode={monthly_enforcement}",
+                    f"OidcIssuerUrl={oidc_issuer_url}",
+                    f"OidcClientId={oidc_client_id}",
                 ]
 
                 # Package the template using AWS CLI
@@ -866,6 +895,38 @@ class DeployCommand(Command):
                 dashboard_url = dashboard_outputs.get("DashboardURL", "")
                 if dashboard_url:
                     console.print(f"• Dashboard URL: [cyan][link={dashboard_url}]{dashboard_url}[/link][/cyan]")
+
+            # Get quota monitoring stack outputs if enabled
+            if profile.quota_monitoring_enabled:
+                quota_stack = profile.stack_names.get("quota", f"{profile.identity_pool_name}-quota")
+                quota_outputs = get_stack_outputs(quota_stack, profile.aws_region)
+
+                if quota_outputs:
+                    console.print("\n[bold]Quota Monitoring Stack:[/bold]")
+                    quota_endpoint = quota_outputs.get("QuotaCheckApiEndpoint")
+                    console.print(f"• Quota API Endpoint: [cyan]{quota_endpoint or 'N/A'}[/cyan]")
+                    console.print(f"• Alert Topic ARN: [cyan]{quota_outputs.get('QuotaAlertTopicArn', 'N/A')}[/cyan]")
+                    console.print(f"• User Metrics Table: [cyan]{quota_outputs.get('QuotaTableName', 'N/A')}[/cyan]")
+                    console.print(f"• Policies Table: [cyan]{quota_outputs.get('PoliciesTableName', 'N/A')}[/cyan]")
+
+                    # Show configured limits
+                    monthly_limit = getattr(profile, "monthly_token_limit", 225000000)
+                    monthly_mode = getattr(profile, "monthly_enforcement_mode", "block")
+                    daily_limit = getattr(profile, "daily_token_limit", None)
+                    daily_mode = getattr(profile, "daily_enforcement_mode", "alert")
+
+                    console.print(f"• Monthly Limit: [cyan]{monthly_limit:,}[/cyan] tokens ({monthly_mode})")
+                    if daily_limit:
+                        console.print(f"• Daily Limit: [cyan]{daily_limit:,}[/cyan] tokens ({daily_mode})")
+
+                    # Save quota outputs to profile for test command and credential provider
+                    if quota_endpoint and quota_endpoint != "N/A":
+                        profile.quota_api_endpoint = quota_endpoint
+                    if quota_outputs.get("PoliciesTableName"):
+                        profile.quota_policies_table = quota_outputs["PoliciesTableName"]
+                    if quota_outputs.get("QuotaTableName"):
+                        profile.user_quota_metrics_table = quota_outputs["QuotaTableName"]
+                    config.save_profile(profile)
 
     def _update_metrics_aggregator_env(self, profile, quota_stack_name: str, console: Console) -> None:
         """Update metrics aggregator Lambda environment variable to include quota table."""

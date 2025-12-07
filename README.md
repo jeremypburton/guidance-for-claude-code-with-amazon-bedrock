@@ -11,6 +11,7 @@ This guidance provides enterprise deployment patterns for Claude Code with Amazo
 - **No API Key Management**: Eliminate the need to distribute or rotate long-lived credentials
 - **Usage Monitoring**: Optional CloudWatch dashboards for tracking usage and costs
 - **Multi-Region Support**: Configure which AWS regions users can access Bedrock in
+- **Multi-Partition Support**: Deploy to AWS Commercial or AWS GovCloud (US) regions
 - **Multi-Platform Support**: Windows, macOS (ARM & Intel), and Linux distributions
 
 ### For End Users
@@ -26,9 +27,10 @@ This guidance provides enterprise deployment patterns for Claude Code with Amazo
 1. [Quick Start](#quick-start)
 2. [Architecture Overview](#architecture-overview)
 3. [Prerequisites](#prerequisites)
-4. [What Gets Deployed](#what-gets-deployed)
-5. [Monitoring and Operations](#monitoring-and-operations)
-6. [Additional Resources](#additional-resources)
+4. [AWS Partition Support](#aws-partition-support)
+5. [What Gets Deployed](#what-gets-deployed)
+6. [Monitoring and Operations](#monitoring-and-operations)
+7. [Additional Resources](#additional-resources)
 
 ## Quick Start
 
@@ -125,6 +127,8 @@ The guidance can be deployed in any AWS region that supports:
 - (Optional) Amazon Athena, AWS Glue, AWS Lambda, and Amazon Data Firehose resources
 - (Optional) AWS CodeBuild
 
+Both AWS Commercial and AWS GovCloud (US) partitions are supported. See [AWS Partition Support](#aws-partition-support) for details.
+
 ### Cross-Region Inference
 
 Claude Code uses Amazon Bedrock's cross-region inference for optimal performance and availability. During setup, you can:
@@ -153,6 +157,73 @@ The authentication tools support all major platforms:
 The package builder automatically creates executables for all platforms using PyInstaller (macOS/Linux) and AWS CodeBuild with Nuitka (Windows). All builds create standalone executables - no Python installation required for end users.
 
 See [QUICK_START.md](QUICK_START.md#platform-builds) for detailed build configuration.
+
+## AWS Partition Support
+
+This guidance supports deployment across multiple AWS partitions with a single, unified codebase. The same CloudFormation templates and deployment process work seamlessly in both AWS Commercial and AWS GovCloud (US) regions.
+
+### Supported Partitions
+
+| Partition | Regions | Use Cases |
+|-----------|---------|-----------|
+| **AWS Commercial** (`aws`) | All regions where Bedrock is available | Standard commercial workloads |
+| **AWS GovCloud (US)** (`aws-us-gov`) | us-gov-west-1, us-gov-east-1 | US government agencies, contractors, and regulated workloads |
+
+### How It Works
+
+The guidance automatically detects the AWS partition at deployment time and configures resources appropriately:
+
+**Resource ARNs:**
+- CloudFormation uses the `${AWS::Partition}` pseudo-parameter
+- Automatically resolves to `aws` or `aws-us-gov`
+- Example: `arn:${AWS::Partition}:bedrock:*::foundation-model/*`
+
+**Service Principals:**
+- Cognito Identity service principals are partition-specific
+- Commercial: `cognito-identity.amazonaws.com`
+- GovCloud West: `cognito-identity-us-gov.amazonaws.com`
+- GovCloud East: `cognito-identity.us-gov-east-1.amazonaws.com`
+- IAM role trust policies automatically use the correct principal based on region
+
+**S3 Endpoints:**
+- Commercial: `s3.region.amazonaws.com`
+- GovCloud: `s3.region.amazonaws.com`
+
+### Deploying to AWS GovCloud
+
+Follow the same [Quick Start](#quick-start) instructions with your GovCloud credentials active. During `ccwb init`, select a GovCloud region (us-gov-west-1 or us-gov-east-1) and the wizard will automatically configure GovCloud-compatible models and endpoints.
+
+**GovCloud-Specific Considerations:**
+
+1. **Credentials:** GovCloud requires separate AWS credentials from commercial accounts
+2. **Model IDs:** GovCloud uses region-prefixed model IDs (e.g., `us-gov.anthropic.*`)
+3. **FIPS Endpoints:** Cognito hosted UI uses `{prefix}.auth-fips.{region}.amazoncognito.com`
+4. **Managed Login:** Branding must be created for each Cognito app client
+
+### Validation
+
+After deployment, verify the correct partition configuration:
+
+```bash
+# Check IAM role ARN uses correct partition
+aws iam get-role \
+  --role-name BedrockCognitoFederatedRole \
+  --region <region> \
+  --query 'Role.Arn'
+
+# Expected ARN formats:
+# Commercial: arn:aws:iam::ACCOUNT:role/BedrockCognitoFederatedRole
+# GovCloud: arn:aws-us-gov:iam::ACCOUNT:role/BedrockCognitoFederatedRole
+```
+
+### Backward Compatibility
+
+✅ **All changes are fully backward compatible**
+
+- Existing commercial deployments continue to work without modification
+- CloudFormation updates can be applied to existing stacks
+- No changes to user-facing functionality
+- No data migration required
 
 ## What Gets Deployed
 

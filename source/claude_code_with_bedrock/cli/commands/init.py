@@ -18,7 +18,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from claude_code_with_bedrock.cli.utils.aws import check_bedrock_access, get_current_region, get_subnets, get_vpcs
+from claude_code_with_bedrock.cli.utils.aws import (
+    check_bedrock_access,
+    get_account_id,
+    get_current_region,
+    get_subnets,
+    get_vpcs,
+)
 from claude_code_with_bedrock.cli.utils.progress import WizardProgress
 from claude_code_with_bedrock.cli.utils.validators import (
     validate_oidc_provider_domain,
@@ -223,19 +229,19 @@ class InitCommand(Command):
 
         console.print("[bold cyan]Prerequisites Check:[/bold cyan]")
 
+        # Required checks
         checks = {
             "AWS CLI installed": self._check_aws_cli(),
             "AWS credentials configured": self._check_aws_credentials(),
             "Python 3.10+ available": self._check_python_version(),
         }
 
-        # Check current region and Bedrock access
+        # Check current region
         region = get_current_region()
         if region:
             checks[f"Current region: {region}"] = True
-            checks[f"Bedrock access enabled in {region}"] = check_bedrock_access(region)
 
-        # Display results
+        # Display required check results
         all_passed = True
         for check, passed in checks.items():
             if passed:
@@ -243,6 +249,16 @@ class InitCommand(Command):
             else:
                 console.print(f"  [red]✗[/red] {check}")
                 all_passed = False
+
+        # Bedrock access is optional (deployment user may not have direct Bedrock permissions)
+        if region:
+            bedrock_access = check_bedrock_access(region)
+            if bedrock_access:
+                console.print(f"  [green]✓[/green] Bedrock access enabled in {region}")
+            else:
+                console.print(
+                    f"  [yellow]⚠[/yellow] Bedrock access not verified in {region} [dim](optional for deployment)[/dim]"
+                )
 
         if not all_passed:
             console.print("\n[red]Prerequisites not met. Please fix the issues above.[/red]")
@@ -284,8 +300,12 @@ class InitCommand(Command):
                 "Enter your OIDC provider domain:",
                 validate=lambda x: validate_oidc_provider_domain(x)
                 or "Invalid provider domain format (e.g., company.okta.com)",
-                instruction="(e.g., company.okta.com, company.auth0.com, login.microsoftonline.com/{ \
-                tenant-id}/v2.0, or my-app.auth.us-east-1.amazoncognito.com)",
+                instruction=(
+                    "(e.g., company.okta.com, company.auth0.com, "
+                    "login.microsoftonline.com/{tenant-id}/v2.0, "
+                    "my-app.auth.us-east-1.amazoncognito.com, or "
+                    "my-app.auth-fips.us-gov-west-1.amazoncognito.com for GovCloud)"
+                ),
                 default=config.get("okta", {}).get("domain", ""),
             ).ask()
 
@@ -328,6 +348,9 @@ class InitCommand(Command):
                         provider_type = "azure"
                     elif hostname_lower.endswith(".amazoncognito.com") or hostname_lower == "amazoncognito.com":
                         provider_type = "cognito"
+                    elif hostname_lower.startswith("cognito-idp.") and ".amazonaws.com" in hostname_lower:
+                        # Handle cognito-idp.{region}.amazonaws.com format (commercial and GovCloud)
+                        provider_type = "cognito"
                     elif questionary.confirm("Is this a custom domain for AWS Cognito User Pool?", default=False).ask():
                         provider_type = "cognito"
             except Exception:
@@ -336,10 +359,23 @@ class InitCommand(Command):
             # For Cognito, we must ask for the User Pool ID
             # Cannot reliably extract from domain due to case sensitivity
             if provider_type == "cognito":
-                # Try to detect region from domain
-                region_match = re.search(r"\.auth\.([^.]+)\.amazoncognito\.com", provider_domain)
+                # Try to detect region from domain (handles both .auth. and .auth-fips.)
+                region_match = re.search(r"\.auth(?:-fips)?\.([^.]+)\.amazoncognito\.com", provider_domain)
                 if not region_match:
-                    region_match = re.search(r"\.([a-z]{2}-[a-z]+-\d+)\.", provider_domain)
+                    region_match = re.search(r"\.([a-z]{2}-(?:gov-)?[a-z]+-\d+)\.", provider_domain)
+
+                # Auto-correct domain for GovCloud regions (must use auth-fips instead of auth)
+                if region_match:
+                    detected_region = region_match.group(1)
+                    if (
+                        detected_region.startswith("us-gov-")
+                        and ".auth." in provider_domain
+                        and ".auth-fips." not in provider_domain
+                    ):
+                        corrected_domain = provider_domain.replace(".auth.", ".auth-fips.")
+                        console.print("\n[yellow]GovCloud detected: Correcting domain to use FIPS endpoint[/yellow]")
+                        console.print(f"[dim]  {provider_domain} → {corrected_domain}[/dim]")
+                        provider_domain = corrected_domain
 
                 region_hint = f" for {region_match.group(1)}" if region_match else ""
 
@@ -430,6 +466,8 @@ class InitCommand(Command):
                 "us-east-2",
                 "us-west-1",
                 "us-west-2",
+                "us-gov-west-1",
+                "us-gov-east-1",
                 "eu-west-1",
                 "eu-west-2",
                 "eu-west-3",
@@ -591,10 +629,13 @@ class InitCommand(Command):
 
                 # Quota monitoring configuration (only if monitoring is enabled)
                 console.print("\n[bold]Quota Monitoring[/bold]")
-                console.print("Per-user token usage limits with automated SNS alerts")
+                console.print("Track per-user token consumption, set limits, and receive alerts")
+                console.print("when users approach or exceed their quotas.")
+                console.print("[dim]Features: per-user/group limits, SNS alerts, access blocking[/dim]")
+                console.print("[dim]Note: Quota monitoring requires the monitoring stack (enabled above)[/dim]")
                 enable_quota_monitoring = questionary.confirm(
                     "Enable quota monitoring?",
-                    default=config.get("quota", {}).get("enabled", False),
+                    default=config.get("quota", {}).get("enabled", True),
                 ).ask()
 
                 # Preserve existing quota settings, only update enabled flag
@@ -606,9 +647,10 @@ class InitCommand(Command):
                     console.print("\n[yellow]Configure quota limits and thresholds[/yellow]")
 
                     # Monthly token limit
+                    console.print("\n[bold]Monthly Limit[/bold]")
                     monthly_limit_millions = questionary.text(
                         "Monthly token limit per user (in millions):",
-                        default=str(config.get("quota", {}).get("monthly_limit_millions", 300)),
+                        default=str(config.get("quota", {}).get("monthly_limit_millions", 225)),
                         validate=lambda x: x.isdigit() and int(x) > 0,
                     ).ask()
 
@@ -620,10 +662,95 @@ class InitCommand(Command):
                     config["quota"]["warning_threshold_80"] = warning_80
                     config["quota"]["warning_threshold_90"] = warning_90
 
-                    console.print("[green]✓[/green] Quota monitoring configured:")
-                    console.print(f"  • Monthly limit: {monthly_limit:,} tokens per user")
-                    console.print(f"  • Warning at: {warning_80:,} tokens (80%)")
-                    console.print(f"  • Critical at: {warning_90:,} tokens (90%)")
+                    console.print(f"  → Monthly limit: {monthly_limit:,} tokens")
+                    console.print(f"  → Warning at 80%: {warning_80:,} tokens")
+                    console.print(f"  → Critical at 90%: {warning_90:,} tokens")
+
+                    # Daily limit configuration (Bill Shock Protection)
+                    console.print("\n[bold]Daily Limit (Bill Shock Protection)[/bold]")
+                    console.print("Prevent runaway usage by setting a daily limit with a burst buffer.")
+
+                    base_daily = monthly_limit / 30
+
+                    # Show burst buffer options
+                    console.print(f"\nBase daily limit (monthly ÷ 30): {int(base_daily):,} tokens")
+                    console.print("\nBurst buffer allows daily variation above the average:")
+                    console.print(f"  • [dim]5%  (strict)[/dim]   → {int(base_daily * 1.05):,}/day")
+                    console.print(f"  • [cyan]10% (default)[/cyan]  → {int(base_daily * 1.10):,}/day")
+                    console.print(f"  • [dim]25% (flexible)[/dim] → {int(base_daily * 1.25):,}/day")
+
+                    burst_buffer = questionary.text(
+                        "Burst buffer percentage (5-25%):",
+                        default=str(config.get("quota", {}).get("burst_buffer_percent", 10)),
+                        validate=lambda x: x.isdigit() and 5 <= int(x) <= 25,
+                    ).ask()
+
+                    burst_percent = int(burst_buffer)
+                    calculated_daily = int(base_daily * (1 + burst_percent / 100))
+
+                    console.print(f"  → Calculated daily limit: {calculated_daily:,} tokens")
+
+                    # Allow custom override
+                    custom_daily = questionary.text(
+                        f"Custom daily limit (Enter to accept {calculated_daily:,}):",
+                        default="",
+                        validate=lambda x: x == "" or (x.isdigit() and int(x) > 0),
+                    ).ask()
+
+                    daily_limit = int(custom_daily) if custom_daily else calculated_daily
+
+                    config["quota"]["daily_limit"] = daily_limit
+                    config["quota"]["burst_buffer_percent"] = burst_percent
+
+                    if custom_daily:
+                        console.print(f"  → Using custom daily limit: {daily_limit:,} tokens")
+
+                    # Enforcement mode configuration
+                    console.print("\n[bold]Enforcement Modes[/bold]")
+                    console.print("Choose how limits are enforced:")
+                    console.print("  • [cyan]alert[/cyan]: Send notifications but allow continued use")
+                    console.print("  • [yellow]block[/yellow]: Deny credential issuance when exceeded")
+
+                    daily_enforcement = questionary.select(
+                        "Daily limit enforcement:",
+                        choices=[
+                            questionary.Choice("alert (warn only)", value="alert"),
+                            questionary.Choice("block (deny access)", value="block"),
+                        ],
+                        default=config.get("quota", {}).get("daily_enforcement_mode", "alert"),
+                    ).ask()
+
+                    monthly_enforcement = questionary.select(
+                        "Monthly limit enforcement:",
+                        choices=[
+                            questionary.Choice("alert (warn only)", value="alert"),
+                            questionary.Choice("block (deny access)", value="block"),
+                        ],
+                        default=config.get("quota", {}).get("monthly_enforcement_mode", "block"),
+                    ).ask()
+
+                    config["quota"]["daily_enforcement_mode"] = daily_enforcement
+                    config["quota"]["monthly_enforcement_mode"] = monthly_enforcement
+
+                    # Quota re-check interval
+                    console.print("\n[bold]Quota Re-Check Interval[/bold]")
+                    console.print("How often to re-check quota with cached credentials:")
+                    console.print("  • 0 = check every request (strictest, ~200ms latency)")
+                    console.print("  • 30 = every 30 minutes (default, recommended)")
+                    console.print("  • 60 = every hour (minimal impact)")
+
+                    check_interval = questionary.text(
+                        "Quota check interval (minutes):",
+                        default=str(config.get("quota", {}).get("check_interval", 30)),
+                        validate=lambda x: x.isdigit() and int(x) >= 0,
+                    ).ask()
+                    config["quota"]["check_interval"] = int(check_interval)
+
+                    console.print("\n[green]✓[/green] Quota monitoring configured:")
+                    console.print(f"  • Monthly: {monthly_limit:,} tokens ({monthly_enforcement})")
+                    console.print(f"  • Daily:   {daily_limit:,} tokens ({daily_enforcement})")
+                    console.print(f"  • Burst buffer: {burst_percent}%")
+                    console.print(f"  • Re-check interval: {check_interval} minutes")
 
             # Save monitoring progress
             progress.save_step("monitoring_complete", config)
@@ -924,6 +1051,7 @@ class InitCommand(Command):
 
             # Step 1: Select Claude model
             model_choices = []
+            default_model_key = saved_model_key or "sonnet-4-5"
             for model_key, model_info in CLAUDE_MODELS.items():
                 # Build region list from available profiles
                 available_profiles = get_available_profiles_for_model(model_key)
@@ -939,19 +1067,12 @@ class InitCommand(Command):
                 regions_text = ", ".join(regions)
 
                 choice_text = f"{model_info['name']} ({regions_text})"
-                model_choices.append(
-                    questionary.Choice(
-                        title=choice_text,
-                        value=model_key,
-                        checked=(
-                            model_key == saved_model_key or (not saved_model_key and model_key == "sonnet-4-5")
-                        ),  # Default to Sonnet 4.5
-                    )
-                )
+                model_choices.append(questionary.Choice(title=choice_text, value=model_key))
 
             selected_model_key = questionary.select(
                 "Select Claude model:",
                 choices=model_choices,
+                default=default_model_key,
                 instruction="(Use arrow keys to select, Enter to confirm)",
             ).ask()
 
@@ -978,9 +1099,7 @@ class InitCommand(Command):
                 description = get_profile_description(selected_model_key, profile_key)
                 profile_name = profile_key.upper() if profile_key != "us" else "US"
                 choice_text = f"{profile_name} Cross-Region - {description}"
-                profile_choices.append(
-                    questionary.Choice(title=choice_text, value=profile_key, checked=(profile_key == saved_profile))
-                )
+                profile_choices.append(questionary.Choice(title=choice_text, value=profile_key))
 
             # Adjust the prompt based on number of options
             if len(available_profiles) == 1:
@@ -991,7 +1110,7 @@ class InitCommand(Command):
                 instruction_text = "(Use arrow keys to select, Enter to confirm)"
 
             selected_profile = questionary.select(
-                prompt_text, choices=profile_choices, instruction=instruction_text
+                prompt_text, choices=profile_choices, default=saved_profile, instruction=instruction_text
             ).ask()
 
             if selected_profile is None:  # User cancelled
@@ -1032,9 +1151,7 @@ class InitCommand(Command):
                 source_region_choices = []
                 for region in available_source_regions:
                     choice_text = f"{region}"
-                    source_region_choices.append(
-                        questionary.Choice(title=choice_text, value=region, checked=(region == saved_source_region))
-                    )
+                    source_region_choices.append(questionary.Choice(title=choice_text, value=region))
 
                 # Adjust prompt based on number of options
                 if len(available_source_regions) == 1:
@@ -1045,7 +1162,10 @@ class InitCommand(Command):
                     instruction_text = "(Use arrow keys to select, Enter to confirm)"
 
                 selected_source_region = questionary.select(
-                    prompt_text, choices=source_region_choices, instruction=instruction_text
+                    prompt_text,
+                    choices=source_region_choices,
+                    default=saved_source_region,
+                    instruction=instruction_text,
                 ).ask()
 
                 if selected_source_region is None:  # User cancelled
@@ -1107,6 +1227,20 @@ class InitCommand(Command):
         table.add_row("Identity Pool", config["aws"]["identity_pool_name"])
         table.add_row("Monitoring", "✓ Enabled" if config["monitoring"]["enabled"] else "✗ Disabled")
         if config.get("monitoring", {}).get("enabled"):
+            quota_config = config.get("quota", {})
+            if quota_config.get("enabled", False):
+                monthly = quota_config.get("monthly_limit", 225000000)
+                daily = quota_config.get("daily_limit")
+                monthly_mode = quota_config.get("monthly_enforcement_mode", "block")
+                daily_mode = quota_config.get("daily_enforcement_mode", "alert")
+                check_interval = quota_config.get("check_interval", 30)
+                quota_status = f"✓ Monthly: {monthly:,} ({monthly_mode})"
+                if daily:
+                    quota_status += f"\n  Daily: {daily:,} ({daily_mode})"
+                quota_status += f"\n  Re-check: {check_interval} min"
+                table.add_row("Quota Monitoring", quota_status)
+            else:
+                table.add_row("Quota Monitoring", "✗ Disabled")
             table.add_row(
                 "Analytics Pipeline", "✓ Enabled" if config.get("analytics", {}).get("enabled", True) else "✗ Disabled"
             )
@@ -1142,6 +1276,13 @@ class InitCommand(Command):
         }
         table.add_row("Bedrock Regions", profile_display.get(cross_region_profile, cross_region_profile))
 
+        # Show AWS account ID
+        account_id = get_account_id()
+        if account_id:
+            table.add_row("AWS Account", account_id)
+        else:
+            table.add_row("AWS Account", "[yellow]Unable to determine[/yellow]")
+
         console.print(table)
 
         # Show what will be created
@@ -1159,6 +1300,10 @@ class InitCommand(Command):
                 console.print("• Kinesis Firehose for analytics data streaming")
                 console.print("• S3 bucket for analytics data storage")
                 console.print("• Glue catalog and Athena tables for analytics")
+            if config.get("quota", {}).get("enabled", False):
+                console.print("• DynamoDB tables for quota tracking")
+                console.print("• Lambda function for quota checking")
+                console.print("• API Gateway for real-time quota API")
         if config.get("codebuild", {}).get("enabled", False):
             console.print("• CodeBuild project for Windows binary builds")
             console.print("• S3 bucket for build artifacts")
@@ -1337,6 +1482,11 @@ class InitCommand(Command):
             monthly_token_limit=config_data.get("quota", {}).get("monthly_limit", 300000000),
             warning_threshold_80=config_data.get("quota", {}).get("warning_threshold_80", 240000000),
             warning_threshold_90=config_data.get("quota", {}).get("warning_threshold_90", 270000000),
+            daily_token_limit=config_data.get("quota", {}).get("daily_limit"),
+            burst_buffer_percent=config_data.get("quota", {}).get("burst_buffer_percent", 10),
+            daily_enforcement_mode=config_data.get("quota", {}).get("daily_enforcement_mode", "alert"),
+            monthly_enforcement_mode=config_data.get("quota", {}).get("monthly_enforcement_mode", "block"),
+            quota_check_interval=config_data.get("quota", {}).get("check_interval", 30),
         )
 
         config.add_profile(profile)

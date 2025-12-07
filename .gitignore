@@ -12,6 +12,10 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Virtual environments
+.venv/
+venv/
+
 
 # IDE
 .vscode/
@@ -35,6 +39,15 @@ Thumbs.db
 # Claude Code settings
 .claude/
 
+#Claude Code plugin settings
+.claude-plugin
+
+# Kiro settings (contains tokens)
+.kiro/settings/mcp.json
+
+# Local documentation and feedback
+FEEDBACK.md
+
 # Temporary test files
 output.json
 *.bak
@@ -50,6 +63,7 @@ source/.ccwb-config/
 
 guidance-submission/
 tests/
+!source/tests/
 assets/docs/planning
 
 .pytest_cache/
@@ -60,3 +74,11 @@ assets/docs/planning
 EPCC_*
 PRs/
 test_cognito_detection.py
+
+# Development documentation (not for production)
+TESTING_*.md
+IMPLEMENTATION_SUMMARY.md
+PARTITION_*.md
+FEEDBACK.md
+.claudeignore
+.mcp.json
