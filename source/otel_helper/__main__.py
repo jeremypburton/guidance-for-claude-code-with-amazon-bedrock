@@ -109,8 +109,19 @@ def extract_user_info(payload):
             f"{user_id_hash[:8]}-{user_id_hash[8:12]}-{user_id_hash[12:16]}-{user_id_hash[16:20]}-{user_id_hash[20:32]}"
         )
 
-    # Extract username - for Cognito it's in cognito:username
-    username = payload.get("cognito:username") or payload.get("preferred_username") or email.split("@")[0]
+    # Extract username - check provider-specific claims
+    # Cognito: cognito:username
+    # JumpCloud: username or preferred_username
+    # Okta/Auth0: preferred_username
+    # Azure: preferred_username or upn
+    username = (
+        payload.get("cognito:username")
+        or payload.get("username")
+        or payload.get("preferred_username")
+        or payload.get("upn")
+        or payload.get("name")
+        or email.split("@")[0]
+    )
 
     # Extract organization - derive from issuer or provider
     org_id = "amazon-internal"  # Default for internal deployment
@@ -137,17 +148,68 @@ def extract_user_info(payload):
                     org_id = "auth0"
                 elif hostname_lower.endswith(".microsoftonline.com") or hostname_lower == "microsoftonline.com":
                     org_id = "azure"
+                elif hostname_lower.endswith(".jumpcloud.com") or hostname_lower == "jumpcloud.com":
+                    org_id = "jc_org"
         except Exception:
             pass  # Keep default org_id if parsing fails
 
     # Extract team/department information - these fields vary by IdP
     # Provide defaults for consistent metric dimensions
-    department = payload.get("department") or payload.get("dept") or payload.get("division") or "unspecified"
-    team = payload.get("team") or payload.get("team_id") or payload.get("group") or "default-team"
-    cost_center = payload.get("cost_center") or payload.get("costCenter") or payload.get("cost_code") or "general"
-    manager = payload.get("manager") or payload.get("manager_email") or "unassigned"
-    location = payload.get("location") or payload.get("office_location") or payload.get("office") or "remote"
-    role = payload.get("role") or payload.get("job_title") or payload.get("title") or "user"
+    
+    # Department - check multiple claim names across providers
+    department = (
+        payload.get("department")
+        or payload.get("dept")
+        or payload.get("division")
+        or payload.get("organizationalUnit")  # JumpCloud custom attribute
+        or "unspecified"
+    )
+
+    team = payload.get("team") or payload.get("team_id") or payload.get("group")
+    if not team:
+        # JumpCloud often provides groups as an array, extract first group as team
+        groups = payload.get("groups") or []
+        if isinstance(groups, list) and groups:
+            # Use first group as team, or join multiple groups
+            team = groups[0] if len(groups) == 1 else ",".join(groups[:3])  # Limit to first 3 groups
+        else:
+            team = "default-team"
+
+    # Cost center
+    cost_center = (
+        payload.get("cost_center")
+        or payload.get("costCenter")
+        or payload.get("cost_code")
+        or payload.get("costcenter")  # JumpCloud lowercase variant
+        or "general"
+    )
+
+    # Manager
+    manager = (
+        payload.get("manager")
+        or payload.get("manager_email")
+        or payload.get("managerId")  # JumpCloud custom attribute
+        or "unassigned"
+    )
+
+    # Location
+    location = (
+        payload.get("location")
+        or payload.get("office_location")
+        or payload.get("office")
+        or payload.get("physicalDeliveryOfficeName")  # JumpCloud LDAP-style attribute
+        or payload.get("l")  # LDAP locality
+        or "remote"
+    )
+
+    # Role/Title
+    role = (
+        payload.get("role")
+        or payload.get("job_title")
+        or payload.get("title")
+        or payload.get("jobTitle")  # JumpCloud custom attribute
+        or "user"
+    )
 
     return {
         "email": email,
