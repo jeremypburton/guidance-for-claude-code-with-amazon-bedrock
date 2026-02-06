@@ -137,6 +137,10 @@ Resources:
                 - C:\Python312\python.exe --version
                 - echo Checking pip version...
                 - C:\Python312\python.exe -m pip --version
+                - echo Fixing Certs
+                - certutil -generateSSTFromWU roots.sst
+                - certutil -addstore -f root roots.sst
+                - del roots.sst
 
             pre_build:
               commands:
@@ -147,7 +151,7 @@ Resources:
                 - C:\Python312\python.exe -m pip install boto3 requests PyJWT cryptography
                 - C:\Python312\python.exe -m pip install keyring pywin32
                 - C:\Python312\python.exe -m pip install questionary rich cleo pydantic pyyaml
-
+                - c:\Python312\python.exe -m pip install --upgrade certifi
             build:
               commands:
                 - echo Building Windows executables sequentially...
