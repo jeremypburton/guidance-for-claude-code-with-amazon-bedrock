@@ -271,7 +271,10 @@ class DeployCommand(Command):
         for param in params:
             if "=" in param:
                 key, value = param.split("=", 1)
-                result.append({"ParameterKey": key, "ParameterValue": value})
+                if value == "USE_PREVIOUS_VALUE":
+                    result.append({"ParameterKey": key, "UsePreviousValue": True})
+                else:
+                    result.append({"ParameterKey": key, "ParameterValue": value})
         return result
 
     def _deploy_stack(self, stack_type: str, profile, console: Console, cf_manager: CloudFormationManager) -> int:
@@ -291,7 +294,6 @@ class DeployCommand(Command):
                 try:
                     # Convert parameters to boto3 format
                     boto3_params = self._convert_params_to_boto3(params) if params else None
-
                     # Deploy stack
                     result = cf_manager.deploy_stack(
                         stack_name=stack_name,
@@ -620,6 +622,7 @@ class DeployCommand(Command):
                     params.append(f"CustomDomainName={monitoring_config['custom_domain']}")
                     params.append(f"HostedZoneId={monitoring_config['hosted_zone_id']}")
 
+                params.append(f"HoneycombApiKey=USE_PREVIOUS_VALUE")
                 console.print(f"[dim]Using parameters: {params}[/dim]")
                 return deploy_with_cf(
                     template, stack_name, params, task_description="Deploying monitoring collector..."

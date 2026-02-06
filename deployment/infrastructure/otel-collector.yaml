@@ -30,12 +30,36 @@ Parameters:
     Default: ''
     Description: Route53 hosted zone ID for custom domain (required if CustomDomainName is provided)
 
+  HoneycombApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Honeycomb API key for forwarding telemetry (leave empty to skip Honeycomb)
+
+  HoneycombDataset:
+    Type: String
+    Default: claude-code
+    Description: Honeycomb dataset name
+
 Conditions:
   HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, '']]
-
+  HasHoneycomb: !Not [!Equals [!Ref HoneycombApiKey, '']]
+  NoHoneycomb: !Equals [!Ref HoneycombApiKey, '']
 # Rules section removed - validation handled by deployment script
 
 Resources:
+  # Honeycomb API Key Secret
+  HoneycombSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: HasHoneycomb
+    Properties:
+      Name: !Sub '${AWS::StackName}/honeycomb-api-key'
+      Description: Honeycomb API key for OTEL collector
+      SecretString: !Ref HoneycombApiKey
+      Tags:
+        - Key: Purpose
+          Value: Honeycomb OTEL exporter authentication
+
   # ECS Cluster
   ECSCluster:
     Type: AWS::ECS::Cluster
@@ -69,7 +93,6 @@ Resources:
         - Key: Stack
           Value: !Ref AWS::StackName
 
-  # Security Groups
   # Security Groups
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -247,8 +270,16 @@ Resources:
                   - ssm:GetParameter
                   - ssm:GetParameters
                 Resource:
-                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/claude-code-otel-config'
-
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-otel-config-with-honeycomb'
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AWS::StackName}/honeycomb-api-key*'
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -290,11 +321,12 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/claude-code-otel-config'
 
-  # SSM Parameter for Configuration
-  OTelConfig:
+  # SSM Parameter for Configuration (Cloudwatch only, no Honeycomb)
+  OTelConfigWithoutHoneycomb:
     Type: AWS::SSM::Parameter
+    Condition: NoHoneycomb
     Properties:
-      Name: claude-code-otel-config
+      Name: !Sub '${AWS::StackName}-otel-config'
       Type: String
       Tier: Advanced
       Description: Custom OpenTelemetry configuration for Claude Code
@@ -421,10 +453,138 @@ Resources:
               receivers: [otlp]
               processors: [attributes, resource, batch/metrics]
               exporters: [awsemf]
+              
+# SSM Parameter for Configuration (with Honeycomb)
+  OTelConfigWithHoneycomb:
+    Type: AWS::SSM::Parameter
+    Condition: HasHoneycomb
+    Properties:
+      Name: !Sub '${AWS::StackName}-otel-config-with-honeycomb'
+      Type: String
+      Tier: Advanced
+      Description: Custom OpenTelemetry configuration for Claude Code with Honeycomb
+      Value: !Sub |
+        extensions:
+          health_check:
+            endpoint: 0.0.0.0:13133
+            path: /
 
-  # ECS Task Definition
-  TaskDefinition:
+        receivers:
+          otlp:
+            protocols:
+              grpc:
+                endpoint: 0.0.0.0:4317
+                include_metadata: true
+              http:
+                endpoint: 0.0.0.0:4318
+                include_metadata: true
+
+        processors:
+          batch/metrics:
+            timeout: 60s
+          batch/logs:
+            timeout: 60s
+          attributes:
+            actions:
+              - key: user.email
+                from_context: metadata.x-user-email
+                action: upsert
+              - key: user.id
+                from_context: metadata.x-user-id
+                action: upsert
+              - key: user.name
+                from_context: metadata.x-user-name
+                action: upsert
+              - key: department
+                from_context: metadata.x-department
+                action: upsert
+              - key: team.id
+                from_context: metadata.x-team-id
+                action: upsert
+              - key: cost_center
+                from_context: metadata.x-cost-center
+                action: upsert
+              - key: organization
+                from_context: metadata.x-organization
+                action: upsert
+              - key: location
+                from_context: metadata.x-location
+                action: upsert
+              - key: role
+                from_context: metadata.x-role
+                action: upsert
+              - key: manager
+                from_context: metadata.x-manager
+                action: upsert
+          resource:
+            attributes:
+              - key: aws.account_id
+                value: "${AWS::AccountId}"
+                action: insert
+              - key: deployment.environment
+                value: "production"
+                action: insert
+
+        exporters:
+          awsemf:
+            namespace: ${MetricsNamespace}
+            log_group_name: /aws/claude-code/metrics
+            dimension_rollup_option: "ZeroAndSingleDimensionRollup"
+            region: ${AWS::Region}
+            output_destination: cloudwatch
+            log_retention: 7
+            resource_to_telemetry_conversion:
+              enabled: true
+            metric_declarations:
+              - dimensions: [[OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[department, OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[team.id, OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[organization, OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[model, OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[cost_center, OTelLib]]
+                metric_name_selectors: ["claude_code.cost.usage", "claude_code.token.usage"]
+              - dimensions: [[type, OTelLib]]
+                metric_name_selectors: ["claude_code.token.usage", "claude_code.lines_of_code.count"]
+              - dimensions: [[tool_name, OTelLib]]
+                metric_name_selectors: ["claude_code.code_edit_tool.*"]
+              - dimensions: [[language, OTelLib]]
+                metric_name_selectors: ["claude_code.code_edit_tool.*"]
+              - dimensions: [[decision, OTelLib]]
+                metric_name_selectors: ["claude_code.code_edit_tool.decision"]
+
+          otlp/honeycomb:
+            endpoint: api.honeycomb.io:443
+            headers:
+              x-honeycomb-team: ${!HONEYCOMB_API_KEY}
+              x-honeycomb-dataset: ${HoneycombDataset}
+
+        service:
+          extensions: [health_check]
+          telemetry:
+            logs:
+              level: debug
+              development: true
+              encoding: json
+              output_paths: [stdout]
+          pipelines:
+            metrics:
+              receivers: [otlp]
+              processors: [attributes, resource, batch/metrics]
+              exporters: [awsemf, otlp/honeycomb]
+            logs:
+              receivers: [otlp]
+              processors: [attributes, resource, batch/logs]
+              exporters: [otlp/honeycomb]
+
+  # ECS Task Definition (without Honeycomb)
+  TaskDefinitionWithoutHoneycomb:
     Type: AWS::ECS::TaskDefinition
+    Condition: NoHoneycomb
     Properties:
       Family: otel-collector
       RequiresCompatibilities:
@@ -441,7 +601,7 @@ Resources:
           Memory: 512
           Secrets:
             - Name: AOT_CONFIG_CONTENT
-              ValueFrom: !Ref OTelConfig
+              ValueFrom: !Ref OTelConfigWithoutHoneycomb
           PortMappings:
             - ContainerPort: 4317
               Protocol: tcp
@@ -454,6 +614,43 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
 
+  # ECS Task Definition (with Honeycomb)
+  TaskDefinitionWithHoneycomb:
+    Type: AWS::ECS::TaskDefinition
+    Condition: HasHoneycomb
+    Properties:
+      Family: otel-collector
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: aws-otel-collector
+          Image: !Ref CollectorImage
+          Essential: true
+          Memory: 512
+          Secrets:
+            - Name: AOT_CONFIG_CONTENT
+              ValueFrom: !Ref OTelConfigWithHoneycomb
+            - Name: HONEYCOMB_API_KEY
+              ValueFrom: !Ref HoneycombSecret
+          PortMappings:
+            - ContainerPort: 4317
+              Protocol: tcp
+            - ContainerPort: 4318
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CollectorLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+
+
   # ECS Service
   ECSService:
     Type: AWS::ECS::Service
@@ -462,7 +659,10 @@ Resources:
     Properties:
       ServiceName: otel-collector-service
       Cluster: !Ref ECSCluster
-      TaskDefinition: !Ref TaskDefinition
+      TaskDefinition: !If
+        - HasHoneycomb
+        - !Ref TaskDefinitionWithHoneycomb
+        - !Ref TaskDefinitionWithoutHoneycomb
       LaunchType: FARGATE
       DesiredCount: 1
       NetworkConfiguration:
@@ -529,11 +729,23 @@ Outputs:
 
   ConfigParameterName:
     Description: SSM Parameter containing collector configuration
-    Value: !Ref OTelConfig
+    Value: !If
+      - HasHoneycomb
+      - !Ref OTelConfigWithHoneycomb
+      - !Ref OTelConfigWithoutHoneycomb
 
   LogGroupName:
     Description: CloudWatch Log Group for metrics
     Value: /aws/claude-code/metrics
+
+  HoneycombEnabled:
+    Description: Whether Honeycomb forwarding is enabled
+    Value: !If [HasHoneycomb, 'true', 'false']
+
+  HoneycombSecretArn:
+    Condition: HasHoneycomb
+    Description: ARN of the Honeycomb API key secret
+    Value: !Ref HoneycombSecret
 
   Note:
     Description: Important deployment information
