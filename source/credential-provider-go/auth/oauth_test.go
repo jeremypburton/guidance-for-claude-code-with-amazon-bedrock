@@ -114,61 +114,97 @@ func TestBuildAuthURL_Azure(t *testing.T) {
 	}
 }
 
-func TestExchangeCodeForTokens_ErrorHandling(t *testing.T) {
-	// Test with a server that returns an error response
+// fakeJWT creates a minimal unsigned JWT with the given claims JSON for testing.
+func fakeJWT(claimsJSON string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(claimsJSON))
+	return header + "." + payload + "."
+}
+
+// withHTTPScheme sets urlScheme to "http" for the duration of a test, then restores it.
+func withHTTPScheme(t *testing.T) {
+	t.Helper()
+	orig := urlScheme
+	urlScheme = "http"
+	t.Cleanup(func() { urlScheme = orig })
+}
+
+func TestExchangeCodeForTokens_Success(t *testing.T) {
+	withHTTPScheme(t)
+
+	jwt := fakeJWT(`{"sub":"user1","email":"u@test.com","exp":9999999999}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if r.FormValue("grant_type") != "authorization_code" {
+			t.Errorf("expected grant_type=authorization_code, got %s", r.FormValue("grant_type"))
+		}
+		if r.FormValue("code") != "authcode123" {
+			t.Errorf("expected code=authcode123, got %s", r.FormValue("code"))
+		}
+		if r.FormValue("client_id") != "my-client" {
+			t.Errorf("expected client_id=my-client, got %s", r.FormValue("client_id"))
+		}
+		if r.FormValue("code_verifier") != "verifier123" {
+			t.Errorf("expected code_verifier=verifier123, got %s", r.FormValue("code_verifier"))
+		}
+
+		resp := map[string]string{
+			"id_token":      jwt,
+			"refresh_token": "rt-from-exchange",
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	cfg := provider.Config{TokenEndpoint: "/token"}
+
+	result, err := ExchangeCodeForTokens(host, "okta", cfg, "my-client", "http://localhost/cb", "authcode123", "verifier123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IDToken != jwt {
+		t.Error("IDToken mismatch")
+	}
+	if result.RefreshToken != "rt-from-exchange" {
+		t.Errorf("expected refresh token 'rt-from-exchange', got '%s'", result.RefreshToken)
+	}
+	if result.TokenClaims["email"] != "u@test.com" {
+		t.Errorf("expected email claim 'u@test.com', got '%v'", result.TokenClaims["email"])
+	}
+}
+
+func TestExchangeCodeForTokens_ErrorResponse(t *testing.T) {
+	withHTTPScheme(t)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `{"error":"invalid_grant"}`)
 	}))
 	defer server.Close()
 
-	// Extract host from test server URL (strip http://)
 	host := strings.TrimPrefix(server.URL, "http://")
+	cfg := provider.Config{TokenEndpoint: "/token"}
 
-	cfg := provider.Config{
-		TokenEndpoint: "/token",
-	}
-
-	// This will fail because the function uses https:// but test server is http://
-	// We're testing that errors are properly returned
 	_, err := ExchangeCodeForTokens(host, "okta", cfg, "client", "redirect", "code", "verifier")
 	if err == nil {
-		t.Error("expected error for failed token exchange")
+		t.Fatal("expected error for 400 response")
+	}
+	if !strings.Contains(err.Error(), "status 400") {
+		t.Errorf("expected status 400 in error, got: %v", err)
 	}
 }
 
-func TestRefreshTokens_ErrorResponse(t *testing.T) {
-	// Test with a server that returns an error response
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"error":"invalid_grant","error_description":"refresh token expired"}`)
-	}))
-	defer server.Close()
+func TestRefreshTokens_Success(t *testing.T) {
+	withHTTPScheme(t)
 
-	host := strings.TrimPrefix(server.URL, "http://")
-
-	cfg := provider.Config{
-		TokenEndpoint: "/token",
-	}
-
-	_, err := RefreshTokens(host, "okta", cfg, "client", "old-refresh-token")
-	if err == nil {
-		t.Error("expected error for expired refresh token")
-	}
-	if !strings.Contains(err.Error(), "token refresh") {
-		t.Errorf("expected 'token refresh' in error, got: %v", err)
-	}
-}
-
-func TestRefreshTokens_ParsesResponse(t *testing.T) {
-	// Create a minimal JWT-like token for testing (header.payload.signature)
-	// The payload contains the claims we need
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user123","email":"test@example.com","exp":9999999999}`))
-	fakeJWT := header + "." + payload + "."
+	jwt := fakeJWT(`{"sub":"user1","email":"u@test.com","exp":9999999999}`)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify the request has the right parameters
 		if err := r.ParseForm(); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -184,46 +220,104 @@ func TestRefreshTokens_ParsesResponse(t *testing.T) {
 		}
 
 		resp := map[string]string{
-			"id_token":      fakeJWT,
-			"refresh_token": "new-refresh-token",
+			"id_token":      jwt,
+			"refresh_token": "rotated-refresh-token",
 		}
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
-	// We can't use RefreshTokens directly because it prepends "https://".
-	// Instead, test the response parsing logic indirectly by verifying
-	// the OAuthResult struct fields are correctly populated.
-	result := &OAuthResult{
-		IDToken:      fakeJWT,
-		RefreshToken: "new-refresh-token",
+	host := strings.TrimPrefix(server.URL, "http://")
+	cfg := provider.Config{TokenEndpoint: "/token"}
+
+	result, err := RefreshTokens(host, "okta", cfg, "my-client", "my-refresh-token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.IDToken != fakeJWT {
-		t.Error("IDToken not set")
+	if result.IDToken != jwt {
+		t.Error("IDToken mismatch")
 	}
-	if result.RefreshToken != "new-refresh-token" {
-		t.Error("RefreshToken not set")
+	if result.RefreshToken != "rotated-refresh-token" {
+		t.Errorf("expected rotated refresh token, got '%s'", result.RefreshToken)
+	}
+	if result.TokenClaims["email"] != "u@test.com" {
+		t.Errorf("expected email claim, got '%v'", result.TokenClaims["email"])
 	}
 }
 
-func TestOAuthResult_HasRefreshToken(t *testing.T) {
-	result := OAuthResult{
-		IDToken:      "id-token-value",
-		RefreshToken: "refresh-token-value",
+func TestRefreshTokens_NoRotation_KeepsOriginal(t *testing.T) {
+	withHTTPScheme(t)
+
+	jwt := fakeJWT(`{"sub":"user1","exp":9999999999}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Provider does NOT return a new refresh_token (no rotation)
+		resp := map[string]string{
+			"id_token": jwt,
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	cfg := provider.Config{TokenEndpoint: "/token"}
+
+	result, err := RefreshTokens(host, "okta", cfg, "client", "original-refresh-token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.RefreshToken != "refresh-token-value" {
-		t.Errorf("expected refresh-token-value, got %s", result.RefreshToken)
+	if result.RefreshToken != "original-refresh-token" {
+		t.Errorf("expected original refresh token preserved, got '%s'", result.RefreshToken)
+	}
+}
+
+func TestRefreshTokens_ErrorResponse(t *testing.T) {
+	withHTTPScheme(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_grant","error_description":"refresh token expired"}`)
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	cfg := provider.Config{TokenEndpoint: "/token"}
+
+	_, err := RefreshTokens(host, "okta", cfg, "client", "old-refresh-token")
+	if err == nil {
+		t.Fatal("expected error for expired refresh token")
+	}
+	if !strings.Contains(err.Error(), "status 400") {
+		t.Errorf("expected status 400 in error, got: %v", err)
+	}
+}
+
+func TestBuildProviderURL_Azure(t *testing.T) {
+	// Azure domains with /v2.0 should have it stripped
+	url := buildProviderURL("login.microsoftonline.com/tenant-id/v2.0", "azure", "/oauth2/v2.0/token")
+	expected := urlScheme + "://login.microsoftonline.com/tenant-id/oauth2/v2.0/token"
+	if url != expected {
+		t.Errorf("expected %s, got %s", expected, url)
+	}
+}
+
+func TestBuildProviderURL_NonAzure(t *testing.T) {
+	url := buildProviderURL("mycompany.okta.com", "okta", "/oauth2/v1/token")
+	expected := urlScheme + "://mycompany.okta.com/oauth2/v1/token"
+	if url != expected {
+		t.Errorf("expected %s, got %s", expected, url)
 	}
 }
 
 func TestBuildAuthURL_IncludesOfflineAccess(t *testing.T) {
-	cfg := provider.ProviderConfigs["okta"]
-	url := BuildAuthURL("mycompany.okta.com", "okta", cfg,
-		"client123", "http://localhost:8400/callback", "state123", "nonce123", "challenge123")
-
-	if !strings.Contains(url, "offline_access") {
-		t.Error("URL missing offline_access scope")
+	for name, cfg := range provider.ProviderConfigs {
+		t.Run(name, func(t *testing.T) {
+			url := BuildAuthURL("example.com", name, cfg,
+				"client", "http://localhost/cb", "state", "nonce", "challenge")
+			if !strings.Contains(url, "offline_access") {
+				t.Errorf("provider %s URL missing offline_access scope", name)
+			}
+		})
 	}
 }
 
@@ -235,7 +329,6 @@ func TestBuildAuthURL_Cognito(t *testing.T) {
 	if !strings.HasPrefix(url, "https://myapp.auth.us-east-1.amazoncognito.com/oauth2/authorize?") {
 		t.Errorf("unexpected Cognito URL: %s", url)
 	}
-	// Cognito uses "openid email offline_access" scopes
 	if !strings.Contains(url, "offline_access") {
 		t.Error("Cognito URL missing offline_access scope")
 	}

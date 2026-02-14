@@ -155,6 +155,26 @@ func runCredentialFlow(cfg *config.ProfileConfig, profile, providerType string, 
 			internal.DebugPrint("Performing periodic quota re-check...")
 			idToken := monitoring.GetMonitoringToken(profile)
 			tokenClaims := monitoring.GetCachedTokenClaims(profile)
+
+			// If ID token is expired, try refreshing it for the quota check
+			if idToken == "" {
+				if rt := monitoring.GetRefreshToken(profile); rt != "" {
+					internal.DebugPrint("ID token expired, attempting refresh for quota re-check...")
+					oauthResult, err := auth.RefreshTokens(cfg.ProviderDomain, providerType, providerCfg,
+						cfg.ClientID, rt)
+					if err == nil {
+						idToken = oauthResult.IDToken
+						tokenClaims = map[string]string{}
+						if email, ok := oauthResult.TokenClaims["email"].(string); ok {
+							tokenClaims["email"] = email
+						}
+						monitoring.SaveMonitoringToken(oauthResult.IDToken, oauthResult.RefreshToken, oauthResult.TokenClaims, profile)
+					} else {
+						internal.DebugPrint("Refresh failed for quota re-check: %v", err)
+					}
+				}
+			}
+
 			if idToken != "" && tokenClaims != nil {
 				claims := jwt.MapClaims{}
 				for k, v := range tokenClaims {
@@ -196,46 +216,60 @@ func runCredentialFlow(cfg *config.ProfileConfig, profile, providerType string, 
 	}
 
 	// Try silent refresh using stored refresh token before opening browser
-	if refreshToken := monitoring.GetRefreshToken(profile); refreshToken != "" {
-		internal.DebugPrint("Attempting silent token refresh for profile '%s'...", profile)
-		oauthResult, err := auth.RefreshTokens(cfg.ProviderDomain, providerType, providerCfg,
-			cfg.ClientID, refreshToken)
-		if err == nil {
-			internal.DebugPrint("Silent token refresh succeeded")
-			return handleNewTokens(cfg, profile, oauthResult.IDToken, oauthResult.TokenClaims, oauthResult.RefreshToken)
-		}
-		internal.DebugPrint("Silent refresh failed, falling back to browser auth: %v", err)
+	oauthResult, err := trySilentRefresh(cfg, providerType, providerCfg, profile)
+	if err == nil {
+		return handleNewTokens(cfg, profile, oauthResult)
 	}
 
 	// Perform OIDC authentication via browser
 	internal.DebugPrint("Authenticating with %s for profile '%s'...", providerCfg.Name, profile)
 
-	idToken, tokenClaims, refreshToken, err := performOIDCAuth(cfg, providerType, providerCfg, redirectPort, redirectURI)
+	oauthResult, err = performOIDCAuth(cfg, providerType, providerCfg, redirectPort, redirectURI)
 	if err != nil {
 		internal.StatusPrint("Error: %v\n", err)
 		return 1
 	}
 
-	return handleNewTokens(cfg, profile, idToken, tokenClaims, refreshToken)
+	return handleNewTokens(cfg, profile, oauthResult)
+}
+
+// trySilentRefresh attempts to obtain new tokens using a stored refresh token.
+// Returns nil result and an error if no refresh token is available or refresh fails.
+func trySilentRefresh(cfg *config.ProfileConfig, providerType string, providerCfg provider.Config, profile string) (*auth.OAuthResult, error) {
+	refreshToken := monitoring.GetRefreshToken(profile)
+	if refreshToken == "" {
+		return nil, fmt.Errorf("no refresh token available")
+	}
+
+	internal.DebugPrint("Attempting silent token refresh for profile '%s'...", profile)
+	oauthResult, err := auth.RefreshTokens(cfg.ProviderDomain, providerType, providerCfg,
+		cfg.ClientID, refreshToken)
+	if err != nil {
+		internal.DebugPrint("Silent refresh failed, falling back to browser auth: %v", err)
+		return nil, err
+	}
+
+	internal.DebugPrint("Silent token refresh succeeded")
+	return oauthResult, nil
 }
 
 // handleNewTokens processes freshly obtained tokens: checks quota, federates for AWS credentials,
 // caches everything, and outputs the credentials.
-func handleNewTokens(cfg *config.ProfileConfig, profile, idToken string, tokenClaims jwt.MapClaims, refreshToken string) int {
+func handleNewTokens(cfg *config.ProfileConfig, profile string, result *auth.OAuthResult) int {
 	// Check quota before issuing credentials
 	if quota.ShouldCheck(cfg.QuotaAPIEndpoint) {
 		internal.DebugPrint("Checking quota before credential issuance...")
-		result := quota.Check(cfg.QuotaAPIEndpoint, idToken, tokenClaims, cfg.QuotaFailMode, cfg.QuotaCheckTimeout)
+		qr := quota.Check(cfg.QuotaAPIEndpoint, result.IDToken, result.TokenClaims, cfg.QuotaFailMode, cfg.QuotaCheckTimeout)
 		quota.SaveQuotaCheckTimestamp(profile)
-		if !result.Allowed {
-			return quota.HandleBlocked(result)
+		if !qr.Allowed {
+			return quota.HandleBlocked(qr)
 		}
-		quota.HandleWarning(result)
+		quota.HandleWarning(qr)
 	}
 
 	// Exchange token for AWS credentials
 	internal.DebugPrint("Exchanging token for AWS credentials...")
-	creds, err := federation.GetAWSCredentials(cfg, idToken, tokenClaims)
+	creds, err := federation.GetAWSCredentials(cfg, result.IDToken, result.TokenClaims)
 	if err != nil {
 		internal.StatusPrint("Error: %v\n", err)
 		return 1
@@ -247,7 +281,7 @@ func handleNewTokens(cfg *config.ProfileConfig, profile, idToken string, tokenCl
 	}
 
 	// Save monitoring token and refresh token (non-fatal)
-	monitoring.SaveMonitoringToken(idToken, refreshToken, tokenClaims, profile)
+	monitoring.SaveMonitoringToken(result.IDToken, result.RefreshToken, result.TokenClaims, profile)
 
 	// Output credentials to stdout
 	printJSON(creds)
@@ -274,68 +308,59 @@ func authenticateForMonitoring(cfg *config.ProfileConfig, profile, providerType 
 	}
 
 	// Try silent refresh first
-	if refreshToken := monitoring.GetRefreshToken(profile); refreshToken != "" {
-		internal.DebugPrint("Attempting silent token refresh for monitoring...")
-		oauthResult, err := auth.RefreshTokens(cfg.ProviderDomain, providerType, providerCfg,
-			cfg.ClientID, refreshToken)
-		if err == nil {
-			internal.DebugPrint("Silent token refresh succeeded for monitoring")
-			creds, err := federation.GetAWSCredentials(cfg, oauthResult.IDToken, oauthResult.TokenClaims)
-			if err == nil {
-				credentials.SaveToCredentialsFile(creds, profile)
-			}
-			monitoring.SaveMonitoringToken(oauthResult.IDToken, oauthResult.RefreshToken, oauthResult.TokenClaims, profile)
-			return oauthResult.IDToken, 0
-		}
-		internal.DebugPrint("Silent refresh failed for monitoring, falling back to browser: %v", err)
+	oauthResult, err := trySilentRefresh(cfg, providerType, providerCfg, profile)
+	if err == nil {
+		return processAuthResult(cfg, profile, oauthResult)
 	}
 
 	internal.DebugPrint("Authenticating with %s for monitoring token...", providerCfg.Name)
 
-	idToken, tokenClaims, refreshToken, err := performOIDCAuth(cfg, providerType, providerCfg, redirectPort, redirectURI)
+	oauthResult, err = performOIDCAuth(cfg, providerType, providerCfg, redirectPort, redirectURI)
 	if err != nil {
 		internal.DebugPrint("Error during monitoring authentication: %v", err)
 		return "", 1
 	}
 
-	// Get AWS credentials (needed for caching, not output)
-	creds, err := federation.GetAWSCredentials(cfg, idToken, tokenClaims)
+	return processAuthResult(cfg, profile, oauthResult)
+}
+
+// processAuthResult handles post-authentication: federates for AWS credentials,
+// caches tokens, and returns the ID token. Used by authenticateForMonitoring.
+func processAuthResult(cfg *config.ProfileConfig, profile string, result *auth.OAuthResult) (string, int) {
+	creds, err := federation.GetAWSCredentials(cfg, result.IDToken, result.TokenClaims)
 	if err != nil {
 		internal.DebugPrint("Error exchanging token: %v", err)
 		return "", 1
 	}
 
-	// Cache credentials
 	credentials.SaveToCredentialsFile(creds, profile)
+	monitoring.SaveMonitoringToken(result.IDToken, result.RefreshToken, result.TokenClaims, profile)
 
-	// Save monitoring token and refresh token
-	monitoring.SaveMonitoringToken(idToken, refreshToken, tokenClaims, profile)
-
-	return idToken, 0
+	return result.IDToken, 0
 }
 
 func performOIDCAuth(cfg *config.ProfileConfig, providerType string, providerCfg provider.Config,
-	redirectPort int, redirectURI string) (string, jwt.MapClaims, string, error) {
+	redirectPort int, redirectURI string) (*auth.OAuthResult, error) {
 
 	pkce, err := auth.GeneratePKCE()
 	if err != nil {
-		return "", nil, "", err
+		return nil, err
 	}
 
 	state, err := auth.GenerateState()
 	if err != nil {
-		return "", nil, "", err
+		return nil, err
 	}
 
 	nonce, err := auth.GenerateNonce()
 	if err != nil {
-		return "", nil, "", err
+		return nil, err
 	}
 
 	// Validate Cognito domain
 	if providerType == "cognito" {
 		if !containsString(cfg.ProviderDomain, "amazoncognito.com") {
-			return "", nil, "", fmt.Errorf(
+			return nil, fmt.Errorf(
 				"for Cognito User Pool, please provide the User Pool domain " +
 					"(e.g., 'my-domain.auth.us-east-1.amazoncognito.com'), " +
 					"not the identity pool endpoint")
@@ -366,20 +391,20 @@ func performOIDCAuth(cfg *config.ProfileConfig, providerType string, providerCfg
 	// Wait for callback
 	res := <-resultCh
 	if res.err != nil {
-		return "", nil, "", res.err
+		return nil, res.err
 	}
 
 	// Exchange code for tokens
 	oauthResult, err := auth.ExchangeCodeForTokens(cfg.ProviderDomain, providerType, providerCfg,
 		cfg.ClientID, redirectURI, res.code, pkce.Verifier)
 	if err != nil {
-		return "", nil, "", err
+		return nil, err
 	}
 
 	// Validate nonce
 	if nonceVal, ok := oauthResult.TokenClaims["nonce"].(string); ok {
 		if nonceVal != nonce {
-			return "", nil, "", fmt.Errorf("invalid nonce in ID token")
+			return nil, fmt.Errorf("invalid nonce in ID token")
 		}
 	}
 
@@ -389,7 +414,7 @@ func performOIDCAuth(cfg *config.ProfileConfig, providerType string, providerCfg
 		internal.DebugPrint("%s", string(claimsJSON))
 	}
 
-	return oauthResult.IDToken, oauthResult.TokenClaims, oauthResult.RefreshToken, nil
+	return oauthResult, nil
 }
 
 func printJSON(v interface{}) {

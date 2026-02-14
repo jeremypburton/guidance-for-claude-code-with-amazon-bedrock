@@ -131,16 +131,24 @@ func StartCallbackServer(port int, expectedState string, timeout time.Duration) 
 	}
 }
 
-// BuildAuthURL constructs the OIDC authorization URL.
-func BuildAuthURL(providerDomain, providerType string, providerCfg provider.Config,
-	clientID, redirectURI, state, nonce, codeChallenge string) string {
+// urlScheme is the URL scheme used for provider endpoints. Defaults to "https".
+// Tests may override this to "http" for use with httptest.NewServer.
+var urlScheme = "https"
 
+// buildProviderURL constructs a provider endpoint URL, handling Azure's /v2.0 suffix.
+func buildProviderURL(providerDomain, providerType, endpoint string) string {
 	domain := providerDomain
 	if providerType == "azure" && strings.HasSuffix(domain, "/v2.0") {
 		domain = strings.TrimSuffix(domain, "/v2.0")
 	}
+	return urlScheme + "://" + domain + endpoint
+}
 
-	baseURL := "https://" + domain
+// BuildAuthURL constructs the OIDC authorization URL.
+func BuildAuthURL(providerDomain, providerType string, providerCfg provider.Config,
+	clientID, redirectURI, state, nonce, codeChallenge string) string {
+
+	baseURL := buildProviderURL(providerDomain, providerType, "")
 
 	params := url.Values{
 		"client_id":             {clientID},
@@ -161,29 +169,18 @@ func BuildAuthURL(providerDomain, providerType string, providerCfg provider.Conf
 	return baseURL + providerCfg.AuthorizeEndpoint + "?" + params.Encode()
 }
 
-// ExchangeCodeForTokens exchanges an authorization code for tokens.
-func ExchangeCodeForTokens(providerDomain, providerType string, providerCfg provider.Config,
-	clientID, redirectURI, code, codeVerifier string) (*OAuthResult, error) {
+// tokenResponse is the JSON structure returned by OIDC token endpoints.
+type tokenResponse struct {
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+}
 
-	domain := providerDomain
-	if providerType == "azure" && strings.HasSuffix(domain, "/v2.0") {
-		domain = strings.TrimSuffix(domain, "/v2.0")
-	}
-
-	tokenURL := "https://" + domain + providerCfg.TokenEndpoint
-
-	data := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-		"client_id":     {clientID},
-		"code_verifier": {codeVerifier},
-	}
-
+// doTokenRequest posts form data to a token endpoint and parses the OAuthResult.
+func doTokenRequest(tokenURL string, data url.Values) (*OAuthResult, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("token exchange request failed: %w", err)
+		return nil, fmt.Errorf("token request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -193,13 +190,10 @@ func ExchangeCodeForTokens(providerDomain, providerType string, providerCfg prov
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("token request failed (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	var tokenResp struct {
-		IDToken      string `json:"id_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
+	var tokenResp tokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
 	}
@@ -220,17 +214,29 @@ func ExchangeCodeForTokens(providerDomain, providerType string, providerCfg prov
 	}, nil
 }
 
+// ExchangeCodeForTokens exchanges an authorization code for tokens.
+func ExchangeCodeForTokens(providerDomain, providerType string, providerCfg provider.Config,
+	clientID, redirectURI, code, codeVerifier string) (*OAuthResult, error) {
+
+	tokenURL := buildProviderURL(providerDomain, providerType, providerCfg.TokenEndpoint)
+
+	data := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"client_id":     {clientID},
+		"code_verifier": {codeVerifier},
+	}
+
+	return doTokenRequest(tokenURL, data)
+}
+
 // RefreshTokens uses a refresh token to obtain a new ID token without browser interaction.
 // If the provider rotates refresh tokens, the new refresh token is returned in OAuthResult.RefreshToken.
 func RefreshTokens(providerDomain, providerType string, providerCfg provider.Config,
 	clientID, refreshToken string) (*OAuthResult, error) {
 
-	domain := providerDomain
-	if providerType == "azure" && strings.HasSuffix(domain, "/v2.0") {
-		domain = strings.TrimSuffix(domain, "/v2.0")
-	}
-
-	tokenURL := "https://" + domain + providerCfg.TokenEndpoint
+	tokenURL := buildProviderURL(providerDomain, providerType, providerCfg.TokenEndpoint)
 
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
@@ -238,50 +244,17 @@ func RefreshTokens(providerDomain, providerType string, providerCfg provider.Con
 		"client_id":     {clientID},
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	result, err := doTokenRequest(tokenURL, data)
 	if err != nil {
-		return nil, fmt.Errorf("token refresh request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read refresh response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var tokenResp struct {
-		IDToken      string `json:"id_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("failed to parse refresh response: %w", err)
-	}
-
-	if tokenResp.IDToken == "" {
-		return nil, fmt.Errorf("no id_token in refresh response")
-	}
-
-	claims, err := internal.DecodeJWTUnverified(tokenResp.IDToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode refreshed ID token: %w", err)
+		return nil, err
 	}
 
 	// If the provider didn't rotate the refresh token, keep the original
-	rt := tokenResp.RefreshToken
-	if rt == "" {
-		rt = refreshToken
+	if result.RefreshToken == "" {
+		result.RefreshToken = refreshToken
 	}
 
-	return &OAuthResult{
-		IDToken:      tokenResp.IDToken,
-		RefreshToken: rt,
-		TokenClaims:  claims,
-	}, nil
+	return result, nil
 }
 
 // OpenBrowser opens the system browser to the given URL.
