@@ -38,6 +38,9 @@ func run() int {
 	refreshIfNeeded := flag.Bool("refresh-if-needed", false, "Refresh credentials if expired")
 	flag.Parse()
 
+	internal.InitDebug()
+	defer internal.CloseDebug()
+
 	if *versionFlag {
 		fmt.Printf("credential-provider-go %s\n", version)
 		return 0
@@ -58,19 +61,19 @@ func run() int {
 	// Load configuration
 	cfg, err := config.LoadConfig(profile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		internal.ErrorPrint("Error: %v\n", err)
 		return 1
 	}
 
 	// Resolve provider type
 	providerType, err := provider.DetermineProviderType(cfg.ProviderDomain, cfg.ProviderType)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		internal.ErrorPrint("Error: %v\n", err)
 		return 1
 	}
 	providerCfg, ok := provider.ProviderConfigs[providerType]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "Error: unknown provider type '%s'\n", providerType)
+		internal.ErrorPrint("Error: unknown provider type '%s'\n", providerType)
 		return 1
 	}
 	// Store resolved provider type back into config for federation to use
@@ -80,12 +83,12 @@ func run() int {
 	if *clearCache {
 		cleared := credentials.ClearCredentials(profile)
 		if len(cleared) > 0 {
-			fmt.Fprintf(os.Stderr, "Cleared cached credentials for profile '%s':\n", profile)
+			internal.ErrorPrint("Cleared cached credentials for profile '%s':\n", profile)
 			for _, item := range cleared {
-				fmt.Fprintf(os.Stderr, "  - %s\n", item)
+				internal.ErrorPrint("  - %s\n", item)
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "No cached credentials found for profile '%s'\n", profile)
+			internal.ErrorPrint("No cached credentials found for profile '%s'\n", profile)
 		}
 		return 0
 	}
@@ -113,17 +116,17 @@ func run() int {
 	// Handle --check-expiration
 	if *checkExpiration {
 		if credentials.CheckExpiration(profile) {
-			fmt.Fprintf(os.Stderr, "Credentials expired or missing for profile '%s'\n", profile)
+			internal.ErrorPrint("Credentials expired or missing for profile '%s'\n", profile)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "Credentials valid for profile '%s'\n", profile)
+		internal.ErrorPrint("Credentials valid for profile '%s'\n", profile)
 		return 0
 	}
 
 	// Handle --refresh-if-needed
 	if *refreshIfNeeded {
 		if cfg.CredentialStorage != "session" {
-			fmt.Fprintln(os.Stderr, "Error: --refresh-if-needed only works with session storage mode")
+			internal.ErrorPrint("Error: --refresh-if-needed only works with session storage mode\n")
 			return 1
 		}
 		if !credentials.CheckExpiration(profile) {
@@ -197,7 +200,7 @@ func runCredentialFlow(cfg *config.ProfileConfig, profile, providerType string, 
 
 	idToken, tokenClaims, err := performOIDCAuth(cfg, providerType, providerCfg, redirectPort, redirectURI)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		internal.ErrorPrint("Error: %v\n", err)
 		return 1
 	}
 
@@ -216,7 +219,7 @@ func runCredentialFlow(cfg *config.ProfileConfig, profile, providerType string, 
 	internal.DebugPrint("Exchanging token for AWS credentials...")
 	creds, err := federation.GetAWSCredentials(cfg, idToken, tokenClaims)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		internal.ErrorPrint("Error: %v\n", err)
 		return 1
 	}
 

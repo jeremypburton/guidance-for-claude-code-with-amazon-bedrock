@@ -1,174 +1,188 @@
-# Plan: File-based debug logging for Go OTEL Helper
+# Plan: File-based debug logging for Credential Process (Go)
 
 ## Goal
-When debug mode is enabled, write log output to a file instead of stderr.
+When a log file is configured, write debug output to a file instead of stderr — matching the pattern already implemented in the OTEL Helper.
+
+## Current State
+
+The credential process has a single logging function in `internal/debug.go`:
+
+```go
+var Debug = true
+
+func DebugPrint(format string, args ...interface{}) {
+    if Debug {
+        fmt.Fprintf(os.Stderr, "Debug: "+format+"\n", args...)
+    }
+}
+```
+
+`DebugPrint` is called from **8 packages**: `main.go`, `config/`, `credentials/`, `federation/`, `locking/`, `monitoring/`, `quota/`, and `internal/` itself. All callers use `internal.DebugPrint(...)`.
+
+Additionally, `main.go` has ~12 direct `fmt.Fprintf(os.Stderr, "Error: ...")` calls for user-facing error output. These are **not** debug messages — they're normal error reporting that should always be visible.
 
 ## Design Decisions
 
-**Log file path configuration**: Use a new environment variable `OTEL_HELPER_LOG_FILE`.
-- If set, all log output goes to that file path instead of stderr.
-- If unset, behavior is unchanged (logs to stderr as today).
-- This keeps the change minimal and consistent with the existing `DEBUG_MODE` env var pattern.
+**Log file path**: New environment variable `CREDENTIAL_PROCESS_LOG_FILE`.
+- If set, `DebugPrint` writes to the file instead of stderr.
+- If unset, behavior is unchanged (debug output goes to stderr as today).
+- Consistent with the `OTEL_HELPER_LOG_FILE` pattern.
 
-**Log level routing**: Dual-destination for warnings and errors.
-- `debugPrint` and `logInfo` write to the log file only (quiet in the terminal).
-- `logWarning` and `logError` write to **both** the log file and stderr, so operators always see problems in the terminal even when file logging is active.
-- When no log file is configured, all levels go to stderr as today (no behavior change).
+**Log level routing — dual-write for user-facing errors**:
+- `DebugPrint` writes to the log file only (quiet terminal) — same as `debugPrint`/`logInfo` in the OTEL Helper.
+- A new `ErrorPrint` function writes to **both** stderr and the log file — same as `logWarning`/`logError` in the OTEL Helper. This replaces the direct `fmt.Fprintf(os.Stderr, ...)` calls in `main.go` that report errors.
+- When no log file is configured, everything goes to stderr as today.
+
+**Why add `ErrorPrint`?**: Without it, error messages from `main.go` would only appear on stderr and never reach the log file, making debugging incomplete. By routing them through `ErrorPrint`, the log file captures the full picture.
 
 ## Changes
 
-### 1. `debug.go` — Add file logging support
+### 1. `internal/debug.go` — Add file logging + `ErrorPrint`
 
-- Add a package-level `var logWriter io.Writer` initialized to `os.Stderr`.
-- Add a `var logFile *os.File` for cleanup.
-- Modify `initDebug()` to:
-  1. Check `OTEL_HELPER_LOG_FILE` env var.
-  2. If set, open the file (create/append mode, `0644` perms) and assign it to `logWriter`.
-  3. Store the `*os.File` in `logFile` for later cleanup.
-- Add a `closeDebug()` function that flushes and closes `logFile` if non-nil.
-- Change `debugPrint` and `logInfo` to write to `logWriter` instead of hard-coded `os.Stderr`.
-- Change `logWarning` and `logError` to write to **both** `logWriter` and `os.Stderr` when a log file is active (using a `logBoth()` helper), so warnings/errors are always visible in the terminal.
+- Add `LogWriter io.Writer` (exported, initialized to `os.Stderr`).
+- Add `LogFile *os.File` for cleanup.
+- Add `InitDebug()` — checks `CREDENTIAL_PROCESS_LOG_FILE` env var, opens file.
+- Add `CloseDebug()` — closes the file if open.
+- Update `DebugPrint` to write to `LogWriter` instead of `os.Stderr`.
+- Add `ErrorPrint` — always writes to stderr, additionally to log file when active.
 
 **Before:**
 ```go
-var (
-    debugMode bool
-    testMode  bool
+package internal
+
+import (
+    "fmt"
+    "os"
 )
 
-func initDebug() {
-    val := strings.ToLower(os.Getenv("DEBUG_MODE"))
-    switch val {
-    case "true", "1", "yes", "y":
-        debugMode = true
-    }
-}
+var Debug = true
 
-func debugPrint(format string, args ...interface{}) {
-    if debugMode {
-        fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+func DebugPrint(format string, args ...interface{}) {
+    if Debug {
+        fmt.Fprintf(os.Stderr, "Debug: "+format+"\n", args...)
     }
 }
 ```
 
 **After:**
 ```go
-var (
-    debugMode bool
-    testMode  bool
-    logWriter io.Writer = os.Stderr
-    logFile   *os.File
+package internal
+
+import (
+    "fmt"
+    "io"
+    "os"
 )
 
-func initDebug() {
-    val := strings.ToLower(os.Getenv("DEBUG_MODE"))
-    switch val {
-    case "true", "1", "yes", "y":
-        debugMode = true
-    }
+var Debug = true
 
-    if path := os.Getenv("OTEL_HELPER_LOG_FILE"); path != "" {
+var (
+    LogWriter io.Writer = os.Stderr
+    LogFile   *os.File
+)
+
+// InitDebug checks CREDENTIAL_PROCESS_LOG_FILE and opens the log file if set.
+func InitDebug() {
+    if path := os.Getenv("CREDENTIAL_PROCESS_LOG_FILE"); path != "" {
         f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
         if err != nil {
-            fmt.Fprintf(os.Stderr, "[WARNING] Could not open log file %s: %v, falling back to stderr\n", path, err)
+            fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v, falling back to stderr\n", path, err)
             return
         }
-        logWriter = f
-        logFile = f
+        LogWriter = f
+        LogFile = f
     }
 }
 
-func closeDebug() {
-    if logFile != nil {
-        logFile.Close()
+// CloseDebug closes the log file if one was opened.
+func CloseDebug() {
+    if LogFile != nil {
+        LogFile.Close()
     }
 }
 
-// debugPrint and logInfo write to logWriter only (file when configured, stderr otherwise).
-func debugPrint(format string, args ...interface{}) {
-    if debugMode {
-        fmt.Fprintf(logWriter, "[DEBUG] "+format+"\n", args...)
+// DebugPrint writes a debug message to LogWriter if debug mode is enabled.
+func DebugPrint(format string, args ...interface{}) {
+    if Debug {
+        fmt.Fprintf(LogWriter, "Debug: "+format+"\n", args...)
     }
 }
 
-func logInfo(format string, args ...interface{}) {
-    if debugMode {
-        fmt.Fprintf(logWriter, "[INFO] "+format+"\n", args...)
-    }
-}
-
-// logWarning and logError always write to stderr.
-// When a log file is active, they also write to the file for completeness.
-func logWarning(format string, args ...interface{}) {
-    msg := fmt.Sprintf("[WARNING] "+format+"\n", args...)
+// ErrorPrint writes an error/status message to stderr.
+// When a log file is active, also writes to the log file.
+func ErrorPrint(format string, args ...interface{}) {
+    msg := fmt.Sprintf(format, args...)
     fmt.Fprint(os.Stderr, msg)
-    if logFile != nil {
-        fmt.Fprint(logWriter, msg)
-    }
-}
-
-func logError(format string, args ...interface{}) {
-    msg := fmt.Sprintf("[ERROR] "+format+"\n", args...)
-    fmt.Fprint(os.Stderr, msg)
-    if logFile != nil {
-        fmt.Fprint(logWriter, msg)
+    if LogFile != nil {
+        fmt.Fprint(LogWriter, msg)
     }
 }
 ```
 
-### 2. `main.go` — Add cleanup call
+Note: Variables and functions are **exported** (capitalized) because they live in the `internal` package and are called from `main`, `config`, `credentials`, etc.
 
-- After `initDebug()`, add `defer closeDebug()`.
+### 2. `main.go` — Add init/cleanup + use `ErrorPrint`
 
-**Before:**
+**Add lifecycle calls** at the top of `run()`:
 ```go
 func run() int {
-    ...
-    initDebug()
-    ...
+    // ... flag parsing ...
+    flag.Parse()
+
+    internal.InitDebug()
+    defer internal.CloseDebug()
+
+    // ... rest of run() ...
 ```
 
-**After:**
-```go
-func run() int {
-    ...
-    initDebug()
-    defer closeDebug()
-    ...
-```
+**Replace direct stderr writes** with `internal.ErrorPrint`. There are ~12 instances in `main.go`:
 
-Note: `defer` works in `run()` because `main()` calls `os.Exit(run())` — the defer executes before `run()` returns the exit code.
+| Line | Current | Replacement |
+|------|---------|-------------|
+| 61 | `fmt.Fprintf(os.Stderr, "Error: %v\n", err)` | `internal.ErrorPrint("Error: %v\n", err)` |
+| 68 | `fmt.Fprintf(os.Stderr, "Error: %v\n", err)` | `internal.ErrorPrint("Error: %v\n", err)` |
+| 73 | `fmt.Fprintf(os.Stderr, "Error: unknown provider type '%s'\n", providerType)` | `internal.ErrorPrint("Error: unknown provider type '%s'\n", providerType)` |
+| 83-88 | Cache clearing status messages | `internal.ErrorPrint(...)` |
+| 116 | Credentials expired message | `internal.ErrorPrint(...)` |
+| 119 | Credentials valid message | `internal.ErrorPrint(...)` |
+| 126 | refresh-if-needed error | `internal.ErrorPrint(...)` |
+| 200 | Auth error | `internal.ErrorPrint(...)` |
+| 219 | Federation error | `internal.ErrorPrint(...)` |
 
-### 3. `debug_test.go` — Update tests
+These all keep their existing format strings — only the destination function changes.
 
-- Add tests for `OTEL_HELPER_LOG_FILE`:
-  - **TestInitDebug_LogFile**: Set env var to a temp file, call `initDebug()`, verify `logWriter` points to the file, write a debug message, verify it appears in the file and NOT on stderr.
-  - **TestInitDebug_LogFile_InvalidPath**: Set env var to an invalid path (e.g., `/nonexistent/dir/file.log`), verify fallback to stderr with no panic.
-  - **TestCloseDebug**: Verify `closeDebug()` closes the file and is safe to call when `logFile` is nil.
-  - **TestLogWarning_DualWrite**: With log file active, call `logWarning()`, verify the message appears in BOTH the log file and stderr.
-  - **TestLogError_DualWrite**: Same as above for `logError()`.
-  - **TestDebugPrint_FileOnly**: With log file active, call `debugPrint()`, verify message appears in the file but NOT on stderr.
-- Existing tests remain unchanged (they don't set `OTEL_HELPER_LOG_FILE`, so behavior is identical).
-- Add cleanup in tests: reset `logWriter = os.Stderr` and `logFile = nil` in each test teardown to avoid cross-test contamination.
+### 3. `internal/debug_test.go` — New test file
 
-### 4. `OTEL_HELPER.md` — Update documentation
+Create a new test file (none currently exists for `internal/debug.go`):
 
-- Add `OTEL_HELPER_LOG_FILE` to the Environment Variables table.
-- Update the Security Considerations section noting that log files may contain redacted JWT payloads when debug mode is active.
+- **TestDebugPrint_WritesToLogWriter**: Set `Debug = true`, set `LogWriter` to a buffer, call `DebugPrint`, verify output.
+- **TestDebugPrint_DisabledSkips**: Set `Debug = false`, verify no output.
+- **TestInitDebug_LogFile**: Set env var to temp file, call `InitDebug()`, verify `LogFile` is non-nil and `LogWriter` points to file.
+- **TestInitDebug_InvalidPath**: Set env var to invalid path, verify fallback to stderr.
+- **TestInitDebug_NoEnvVar**: Verify no-op when env var unset.
+- **TestCloseDebug_NilSafe**: Call `CloseDebug()` with `LogFile = nil`, verify no panic.
+- **TestErrorPrint_DualWrite**: With log file active, call `ErrorPrint`, verify message in both stderr and file.
+- **TestDebugPrint_FileOnly**: With log file active, call `DebugPrint`, verify in file but NOT on stderr.
+
+Each test uses a cleanup helper to reset `LogWriter = os.Stderr`, `LogFile = nil`, `Debug = true`.
+
+### 4. Documentation update
+
+Add a note about `CREDENTIAL_PROCESS_LOG_FILE` to `assets/docs/OTEL_HELPER.md` in a new "Credential Process Logging" subsection under Configuration Reference, or to the existing MONITORING.md if more appropriate.
 
 ## Files Modified
 
 | File | Change |
 |------|--------|
-| `source/otel-helper-go/debug.go` | Add `logWriter`, `logFile`, `closeDebug()`; update all log functions |
-| `source/otel-helper-go/main.go` | Add `defer closeDebug()` after `initDebug()` |
-| `source/otel-helper-go/debug_test.go` | Add file logging tests, cleanup helpers |
-| `assets/docs/OTEL_HELPER.md` | Document new env var |
+| `source/credential-provider-go/internal/debug.go` | Add `LogWriter`, `LogFile`, `InitDebug()`, `CloseDebug()`, `ErrorPrint()`; update `DebugPrint` |
+| `source/credential-provider-go/main.go` | Add `InitDebug()`/`CloseDebug()` lifecycle; replace `fmt.Fprintf(os.Stderr, ...)` with `internal.ErrorPrint(...)` |
+| `source/credential-provider-go/internal/debug_test.go` | New file — 8 tests |
+| `assets/docs/OTEL_HELPER.md` or `assets/docs/MONITORING.md` | Document `CREDENTIAL_PROCESS_LOG_FILE` env var |
 
 ## What Does NOT Change
 
-- Python implementation (reference only, not shipped).
-- Normal-mode behavior (no `OTEL_HELPER_LOG_FILE` set = identical to today).
-- stdout output (JSON headers) — completely unaffected.
-- Test mode (`--test`) output — still goes to stdout.
-- The `DEBUG_MODE` env var — still controls whether debug/info messages are emitted at all.
+- All other packages (`config/`, `credentials/`, `federation/`, `locking/`, `monitoring/`, `quota/`) continue calling `internal.DebugPrint(...)` unchanged — it just routes to a different writer.
+- `internal.Debug` flag behavior (controls whether `DebugPrint` emits anything) stays the same.
+- stdout output (JSON credentials) — completely unaffected.
+- Python credential provider implementation — not modified.
+- No log file configured = identical behavior to today.
