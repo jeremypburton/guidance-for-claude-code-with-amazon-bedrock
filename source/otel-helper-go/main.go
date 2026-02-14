@@ -19,6 +19,7 @@ func run() int {
 	flag.Parse()
 
 	initDebug()
+	defer closeDebug()
 
 	testMode = *testFlag
 

@@ -275,7 +275,7 @@ Located in `source/otel-helper-go/`. This is the version compiled and distribute
 | `provider.go` | `detectProvider()` - OIDC provider detection from issuer URL |
 | `token.go` | `getTokenViaCredentialProcess()` - Calls credential-process binary with 5-min timeout |
 | `headers.go` | `formatAsHeaders()` - Maps `UserInfo` fields to `x-*` HTTP header names |
-| `debug.go` | Logging utilities, `DEBUG_MODE` initialization |
+| `debug.go` | Logging utilities, `DEBUG_MODE` / `OTEL_HELPER_LOG_FILE` initialization, file log lifecycle |
 
 **Key properties:**
 - Zero external dependencies (Go stdlib only, per `go.mod`)
@@ -524,7 +524,8 @@ The `settings.json` references this path:
 |----------|---------|--------|
 | `CLAUDE_CODE_MONITORING_TOKEN` | JWT token for user attribution (preferred, avoids subprocess call) | Credential Provider |
 | `AWS_PROFILE` | Profile name passed to `credential-process --profile` | Claude Code settings.json |
-| `DEBUG_MODE` | Enable debug logging to stderr (`true`, `1`, `yes`, `y`) | Manual |
+| `DEBUG_MODE` | Enable debug logging (`true`, `1`, `yes`, `y`) | Manual |
+| `OTEL_HELPER_LOG_FILE` | File path for log output. When set, debug/info messages write to this file instead of stderr. Warnings and errors always appear on stderr and are additionally written to the file. If the file cannot be opened, falls back to stderr. | Manual |
 
 ### CLI Arguments
 
@@ -562,7 +563,7 @@ Both flags enable debug mode. In normal operation (no flags), only the JSON head
 ### Token Handling
 
 - The JWT signature is **not verified** by the OTEL Helper. The token comes from a trusted source (credential-process or the credential provider's environment variable). Signature verification happens at the OIDC provider level during authentication.
-- Tokens are never written to disk or logged in normal mode.
+- Tokens are never written to disk or logged in normal mode. When `OTEL_HELPER_LOG_FILE` is set with debug mode active, the log file will contain redacted JWT payloads (sensitive fields like `email`, `sub` are replaced with `<field-redacted>`).
 - The credential-process call has a 300-second timeout to prevent hangs.
 
 ### Failure Behavior
