@@ -13,14 +13,15 @@ import (
 
 // tokenData is the JSON structure stored in the monitoring token file.
 type tokenData struct {
-	Token   string `json:"token"`
-	Expires int64  `json:"expires"`
-	Email   string `json:"email"`
-	Profile string `json:"profile"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Expires      int64  `json:"expires"`
+	Email        string `json:"email"`
+	Profile      string `json:"profile"`
 }
 
-// SaveMonitoringToken saves the ID token for monitoring authentication.
-func SaveMonitoringToken(idToken string, claims jwt.MapClaims, profile string) {
+// SaveMonitoringToken saves the ID token and optional refresh token for monitoring authentication.
+func SaveMonitoringToken(idToken, refreshToken string, claims jwt.MapClaims, profile string) {
 	exp := int64(0)
 	if v, ok := claims["exp"].(float64); ok {
 		exp = int64(v)
@@ -31,10 +32,11 @@ func SaveMonitoringToken(idToken string, claims jwt.MapClaims, profile string) {
 	}
 
 	data := tokenData{
-		Token:   idToken,
-		Expires: exp,
-		Email:   email,
-		Profile: profile,
+		Token:        idToken,
+		RefreshToken: refreshToken,
+		Expires:      exp,
+		Email:        email,
+		Profile:      profile,
 	}
 
 	home, err := os.UserHomeDir()
@@ -122,4 +124,26 @@ func GetCachedTokenClaims(profile string) map[string]string {
 	return map[string]string{
 		"email": data.Email,
 	}
+}
+
+// GetRefreshToken retrieves the stored refresh token for a profile.
+// Returns empty string if no refresh token is available.
+func GetRefreshToken(profile string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	tokenFile := filepath.Join(home, ".claude-code-session", profile+"-monitoring.json")
+	raw, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return ""
+	}
+
+	var data tokenData
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return ""
+	}
+
+	return data.RefreshToken
 }

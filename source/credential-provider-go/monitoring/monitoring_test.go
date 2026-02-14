@@ -23,7 +23,7 @@ func TestSaveAndGetMonitoringToken(t *testing.T) {
 		"exp":   float64(time.Now().UTC().Add(2 * time.Hour).Unix()),
 	}
 
-	SaveMonitoringToken("test-id-token", claims, "TestProfile")
+	SaveMonitoringToken("test-id-token", "test-refresh-token", claims, "TestProfile")
 
 	// Verify file was created with 0600 permissions
 	tokenFile := filepath.Join(tmpHome, ".claude-code-session", "TestProfile-monitoring.json")
@@ -57,7 +57,7 @@ func TestGetMonitoringToken_ExpiredToken(t *testing.T) {
 		"exp":   float64(time.Now().UTC().Add(-1 * time.Hour).Unix()), // expired
 	}
 
-	SaveMonitoringToken("expired-token", claims, "TestProfile")
+	SaveMonitoringToken("expired-token", "refresh-token", claims, "TestProfile")
 	os.Unsetenv("CLAUDE_CODE_MONITORING_TOKEN")
 
 	token := GetMonitoringToken("TestProfile")
@@ -102,7 +102,7 @@ func TestGetMonitoringToken_ExpiringWithin10Minutes(t *testing.T) {
 		"exp":   float64(time.Now().UTC().Add(5 * time.Minute).Unix()),
 	}
 
-	SaveMonitoringToken("almost-expired-token", claims, "TestProfile")
+	SaveMonitoringToken("almost-expired-token", "refresh-token", claims, "TestProfile")
 	os.Unsetenv("CLAUDE_CODE_MONITORING_TOKEN")
 
 	token := GetMonitoringToken("TestProfile")
@@ -122,7 +122,7 @@ func TestGetCachedTokenClaims(t *testing.T) {
 		"exp":   float64(time.Now().UTC().Add(1 * time.Hour).Unix()),
 	}
 
-	SaveMonitoringToken("id-token", claims, "Prof1")
+	SaveMonitoringToken("id-token", "refresh-token", claims, "Prof1")
 
 	cached := GetCachedTokenClaims("Prof1")
 	if cached == nil {
@@ -130,6 +130,57 @@ func TestGetCachedTokenClaims(t *testing.T) {
 	}
 	if cached["email"] != "user@company.com" {
 		t.Errorf("expected user@company.com, got %s", cached["email"])
+	}
+}
+
+func TestGetRefreshToken(t *testing.T) {
+	tmpHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", origHome)
+
+	claims := jwt.MapClaims{
+		"email": "test@example.com",
+		"exp":   float64(time.Now().UTC().Add(2 * time.Hour).Unix()),
+	}
+
+	SaveMonitoringToken("id-token", "my-refresh-token", claims, "TestProfile")
+
+	rt := GetRefreshToken("TestProfile")
+	if rt != "my-refresh-token" {
+		t.Errorf("expected my-refresh-token, got %s", rt)
+	}
+}
+
+func TestGetRefreshToken_NoFile(t *testing.T) {
+	tmpHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", origHome)
+
+	rt := GetRefreshToken("NonExistent")
+	if rt != "" {
+		t.Errorf("expected empty string, got %s", rt)
+	}
+}
+
+func TestGetRefreshToken_EmptyRefreshToken(t *testing.T) {
+	tmpHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", origHome)
+
+	claims := jwt.MapClaims{
+		"email": "test@example.com",
+		"exp":   float64(time.Now().UTC().Add(2 * time.Hour).Unix()),
+	}
+
+	// Save without refresh token
+	SaveMonitoringToken("id-token", "", claims, "TestProfile")
+
+	rt := GetRefreshToken("TestProfile")
+	if rt != "" {
+		t.Errorf("expected empty string, got %s", rt)
 	}
 }
 

@@ -22,8 +22,9 @@ import (
 
 // OAuthResult holds the tokens returned from an OIDC authentication flow.
 type OAuthResult struct {
-	IDToken     string
-	TokenClaims jwtlib.MapClaims
+	IDToken      string
+	RefreshToken string
+	TokenClaims  jwtlib.MapClaims
 }
 
 // PKCEParams holds the PKCE code verifier and challenge.
@@ -196,7 +197,8 @@ func ExchangeCodeForTokens(providerDomain, providerType string, providerCfg prov
 	}
 
 	var tokenResp struct {
-		IDToken string `json:"id_token"`
+		IDToken      string `json:"id_token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
@@ -212,8 +214,73 @@ func ExchangeCodeForTokens(providerDomain, providerType string, providerCfg prov
 	}
 
 	return &OAuthResult{
-		IDToken:     tokenResp.IDToken,
-		TokenClaims: claims,
+		IDToken:      tokenResp.IDToken,
+		RefreshToken: tokenResp.RefreshToken,
+		TokenClaims:  claims,
+	}, nil
+}
+
+// RefreshTokens uses a refresh token to obtain a new ID token without browser interaction.
+// If the provider rotates refresh tokens, the new refresh token is returned in OAuthResult.RefreshToken.
+func RefreshTokens(providerDomain, providerType string, providerCfg provider.Config,
+	clientID, refreshToken string) (*OAuthResult, error) {
+
+	domain := providerDomain
+	if providerType == "azure" && strings.HasSuffix(domain, "/v2.0") {
+		domain = strings.TrimSuffix(domain, "/v2.0")
+	}
+
+	tokenURL := "https://" + domain + providerCfg.TokenEndpoint
+
+	data := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {clientID},
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("token refresh request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read refresh response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token refresh failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		IDToken      string `json:"id_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse refresh response: %w", err)
+	}
+
+	if tokenResp.IDToken == "" {
+		return nil, fmt.Errorf("no id_token in refresh response")
+	}
+
+	claims, err := internal.DecodeJWTUnverified(tokenResp.IDToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode refreshed ID token: %w", err)
+	}
+
+	// If the provider didn't rotate the refresh token, keep the original
+	rt := tokenResp.RefreshToken
+	if rt == "" {
+		rt = refreshToken
+	}
+
+	return &OAuthResult{
+		IDToken:      tokenResp.IDToken,
+		RefreshToken: rt,
+		TokenClaims:  claims,
 	}, nil
 }
 
