@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Debug controls whether debug messages are emitted via DebugPrint.
+// Enabled by setting the DEBUG_MODE environment variable to true, 1, yes, or y.
 // Output goes to LogWriter, which defaults to stderr but is redirected
 // to a file when CREDENTIAL_PROCESS_LOG_FILE is set.
-var Debug = true
+var Debug bool
 
 var (
 	// LogWriter is the destination for debug log output.
@@ -20,8 +22,15 @@ var (
 	LogFile *os.File
 )
 
-// InitDebug checks CREDENTIAL_PROCESS_LOG_FILE and opens the log file if set.
+// InitDebug checks DEBUG_MODE to enable debug output, and
+// CREDENTIAL_PROCESS_LOG_FILE to redirect output to a file.
 func InitDebug() {
+	val := strings.ToLower(os.Getenv("DEBUG_MODE"))
+	switch val {
+	case "true", "1", "yes", "y":
+		Debug = true
+	}
+
 	if path := os.Getenv("CREDENTIAL_PROCESS_LOG_FILE"); path != "" {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {

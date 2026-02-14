@@ -17,7 +17,7 @@ func resetDebugState(t *testing.T) {
 		}
 		LogWriter = os.Stderr
 		LogFile = nil
-		Debug = true
+		Debug = false
 	})
 }
 
@@ -52,6 +52,7 @@ func TestInitDebug_LogFile(t *testing.T) {
 	resetDebugState(t)
 	tmpFile := filepath.Join(t.TempDir(), "test.log")
 	t.Setenv("CREDENTIAL_PROCESS_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "true")
 
 	InitDebug()
 
@@ -60,6 +61,9 @@ func TestInitDebug_LogFile(t *testing.T) {
 	}
 	if LogWriter == os.Stderr {
 		t.Fatal("expected LogWriter to be redirected from stderr")
+	}
+	if !Debug {
+		t.Fatal("expected Debug to be true after InitDebug with DEBUG_MODE=true")
 	}
 
 	// Write a debug message and verify it lands in the file
@@ -72,6 +76,36 @@ func TestInitDebug_LogFile(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "file test message") {
 		t.Errorf("expected 'file test message' in log file, got: %q", string(data))
+	}
+}
+
+func TestInitDebug_DebugModeEnvVar(t *testing.T) {
+	for _, val := range []string{"true", "1", "yes", "y", "TRUE", "Yes"} {
+		t.Run(val, func(t *testing.T) {
+			resetDebugState(t)
+			t.Setenv("DEBUG_MODE", val)
+
+			InitDebug()
+
+			if !Debug {
+				t.Errorf("expected Debug=true for DEBUG_MODE=%q", val)
+			}
+		})
+	}
+}
+
+func TestInitDebug_DebugModeDisabled(t *testing.T) {
+	for _, val := range []string{"", "false", "0", "no"} {
+		t.Run(val, func(t *testing.T) {
+			resetDebugState(t)
+			t.Setenv("DEBUG_MODE", val)
+
+			InitDebug()
+
+			if Debug {
+				t.Errorf("expected Debug=false for DEBUG_MODE=%q", val)
+			}
+		})
 	}
 }
 
@@ -170,9 +204,9 @@ func TestDebugPrint_FileOnly(t *testing.T) {
 	resetDebugState(t)
 	tmpFile := filepath.Join(t.TempDir(), "debug.log")
 	t.Setenv("CREDENTIAL_PROCESS_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "true")
 
 	InitDebug()
-	Debug = true
 
 	// Capture stderr
 	oldStderr := os.Stderr
