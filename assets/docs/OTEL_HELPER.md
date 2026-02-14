@@ -526,6 +526,7 @@ The `settings.json` references this path:
 | `AWS_PROFILE` | Profile name passed to `credential-process --profile` | Claude Code settings.json |
 | `DEBUG_MODE` | Enable debug logging (`true`, `1`, `yes`, `y`) | Manual |
 | `OTEL_HELPER_LOG_FILE` | File path for log output. When set, debug/info messages write to this file instead of stderr. Warnings and errors always appear on stderr and are additionally written to the file. If the file cannot be opened, falls back to stderr. | Manual |
+| `CREDENTIAL_PROCESS_LOG_FILE` | File path for credential process log output. When set, debug messages write to this file instead of stderr. User-facing status/error messages always appear on stderr and are additionally written to the file. If the file cannot be opened, falls back to stderr. | Manual |
 
 ### CLI Arguments
 
@@ -536,7 +537,7 @@ otel-helper [--test] [--verbose]
 | Flag | Effect |
 |------|--------|
 | `--test` | Verbose human-readable output showing all extracted attributes and headers |
-| `--verbose` | Enable debug logging to stderr |
+| `--verbose` | Enable debug logging to stderr (or to the file specified by `OTEL_HELPER_LOG_FILE` when set) |
 
 Both flags enable debug mode. In normal operation (no flags), only the JSON header object is written to stdout.
 

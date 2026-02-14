@@ -6,7 +6,9 @@ import (
 	"os"
 )
 
-// Debug controls whether debug messages are printed to stderr.
+// Debug controls whether debug messages are emitted via DebugPrint.
+// Output goes to LogWriter, which defaults to stderr but is redirected
+// to a file when CREDENTIAL_PROCESS_LOG_FILE is set.
 var Debug = true
 
 var (
@@ -21,9 +23,9 @@ var (
 // InitDebug checks CREDENTIAL_PROCESS_LOG_FILE and opens the log file if set.
 func InitDebug() {
 	if path := os.Getenv("CREDENTIAL_PROCESS_LOG_FILE"); path != "" {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v, falling back to stderr\n", path, err)
+			fmt.Fprintf(os.Stderr, "[WARNING] Could not open log file %s: %v, falling back to stderr\n", path, err)
 			return
 		}
 		LogWriter = f
@@ -31,10 +33,12 @@ func InitDebug() {
 	}
 }
 
-// CloseDebug closes the log file if one was opened.
+// CloseDebug closes the log file if one was opened and resets the writer to stderr.
 func CloseDebug() {
 	if LogFile != nil {
 		LogFile.Close()
+		LogFile = nil
+		LogWriter = os.Stderr
 	}
 }
 
@@ -45,9 +49,10 @@ func DebugPrint(format string, args ...interface{}) {
 	}
 }
 
-// ErrorPrint writes an error/status message to stderr.
+// StatusPrint writes a user-facing message (errors, status, informational) to stderr.
 // When a log file is active, also writes to the log file for completeness.
-func ErrorPrint(format string, args ...interface{}) {
+// Unlike DebugPrint, this is not gated on the Debug flag — messages always appear.
+func StatusPrint(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	fmt.Fprint(os.Stderr, msg)
 	if LogFile != nil {

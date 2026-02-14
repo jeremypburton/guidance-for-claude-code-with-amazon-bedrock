@@ -24,7 +24,7 @@ func initDebug() {
 	}
 
 	if path := os.Getenv("OTEL_HELPER_LOG_FILE"); path != "" {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[WARNING] Could not open log file %s: %v, falling back to stderr\n", path, err)
 			return
@@ -34,10 +34,12 @@ func initDebug() {
 	}
 }
 
-// closeDebug closes the log file if one was opened.
+// closeDebug closes the log file if one was opened and resets the writer to stderr.
 func closeDebug() {
 	if logFile != nil {
 		logFile.Close()
+		logFile = nil
+		logWriter = os.Stderr
 	}
 }
 

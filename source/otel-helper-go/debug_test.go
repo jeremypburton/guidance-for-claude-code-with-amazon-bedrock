@@ -9,13 +9,18 @@ import (
 )
 
 // resetDebugState restores debug globals to their defaults.
-func resetDebugState() {
-	debugMode = false
-	logWriter = os.Stderr
-	if logFile != nil {
-		logFile.Close()
+// Uses t.Cleanup to guarantee restoration even on test failure.
+func resetDebugState(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		debugMode = false
+		testMode = false
+		if logFile != nil {
+			logFile.Close()
+		}
 		logFile = nil
-	}
+		logWriter = os.Stderr
+	})
 }
 
 func TestInitDebug_AcceptedValues(t *testing.T) {
@@ -23,11 +28,10 @@ func TestInitDebug_AcceptedValues(t *testing.T) {
 
 	for _, val := range accepted {
 		t.Run(val, func(t *testing.T) {
-			defer resetDebugState()
-			os.Unsetenv("OTEL_HELPER_LOG_FILE")
+			resetDebugState(t)
+			t.Setenv("OTEL_HELPER_LOG_FILE", "")
+			t.Setenv("DEBUG_MODE", val)
 			debugMode = false
-			os.Setenv("DEBUG_MODE", val)
-			defer os.Unsetenv("DEBUG_MODE")
 
 			initDebug()
 
@@ -43,11 +47,10 @@ func TestInitDebug_RejectedValues(t *testing.T) {
 
 	for _, val := range rejected {
 		t.Run(val, func(t *testing.T) {
-			defer resetDebugState()
-			os.Unsetenv("OTEL_HELPER_LOG_FILE")
+			resetDebugState(t)
+			t.Setenv("OTEL_HELPER_LOG_FILE", "")
+			t.Setenv("DEBUG_MODE", val)
 			debugMode = false
-			os.Setenv("DEBUG_MODE", val)
-			defer os.Unsetenv("DEBUG_MODE")
 
 			initDebug()
 
@@ -59,10 +62,10 @@ func TestInitDebug_RejectedValues(t *testing.T) {
 }
 
 func TestInitDebug_Unset(t *testing.T) {
-	defer resetDebugState()
-	os.Unsetenv("OTEL_HELPER_LOG_FILE")
+	resetDebugState(t)
+	t.Setenv("OTEL_HELPER_LOG_FILE", "")
+	t.Setenv("DEBUG_MODE", "")
 	debugMode = false
-	os.Unsetenv("DEBUG_MODE")
 
 	initDebug()
 
@@ -72,13 +75,11 @@ func TestInitDebug_Unset(t *testing.T) {
 }
 
 func TestInitDebug_LogFile(t *testing.T) {
-	defer resetDebugState()
+	resetDebugState(t)
 
 	tmpFile := filepath.Join(t.TempDir(), "otel-helper-test.log")
-	os.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
-	defer os.Unsetenv("OTEL_HELPER_LOG_FILE")
-	os.Setenv("DEBUG_MODE", "true")
-	defer os.Unsetenv("DEBUG_MODE")
+	t.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "true")
 
 	initDebug()
 
@@ -93,7 +94,6 @@ func TestInitDebug_LogFile(t *testing.T) {
 	debugPrint("test message %d", 42)
 
 	closeDebug()
-	logFile = nil
 
 	content, err := os.ReadFile(tmpFile)
 	if err != nil {
@@ -105,11 +105,10 @@ func TestInitDebug_LogFile(t *testing.T) {
 }
 
 func TestInitDebug_LogFile_InvalidPath(t *testing.T) {
-	defer resetDebugState()
+	resetDebugState(t)
 
-	os.Setenv("OTEL_HELPER_LOG_FILE", "/nonexistent/dir/otel-helper.log")
-	defer os.Unsetenv("OTEL_HELPER_LOG_FILE")
-	os.Unsetenv("DEBUG_MODE")
+	t.Setenv("OTEL_HELPER_LOG_FILE", "/nonexistent/dir/otel-helper.log")
+	t.Setenv("DEBUG_MODE", "")
 
 	// Should not panic, should fall back to stderr
 	initDebug()
@@ -123,20 +122,37 @@ func TestInitDebug_LogFile_InvalidPath(t *testing.T) {
 }
 
 func TestCloseDebug_NilFile(t *testing.T) {
-	defer resetDebugState()
+	resetDebugState(t)
 	logFile = nil
 
 	// Should not panic
 	closeDebug()
 }
 
-func TestLogWarning_DualWrite(t *testing.T) {
-	defer resetDebugState()
+func TestCloseDebug_ResetsState(t *testing.T) {
+	resetDebugState(t)
 
 	tmpFile := filepath.Join(t.TempDir(), "otel-helper-test.log")
-	os.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
-	defer os.Unsetenv("OTEL_HELPER_LOG_FILE")
-	os.Unsetenv("DEBUG_MODE")
+	t.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "true")
+
+	initDebug()
+	closeDebug()
+
+	if logFile != nil {
+		t.Error("closeDebug() should nil out logFile")
+	}
+	if logWriter != os.Stderr {
+		t.Error("closeDebug() should reset logWriter to os.Stderr")
+	}
+}
+
+func TestLogWarning_DualWrite(t *testing.T) {
+	resetDebugState(t)
+
+	tmpFile := filepath.Join(t.TempDir(), "otel-helper-test.log")
+	t.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "")
 
 	initDebug()
 
@@ -154,7 +170,6 @@ func TestLogWarning_DualWrite(t *testing.T) {
 	stderrBuf.ReadFrom(r)
 
 	closeDebug()
-	logFile = nil
 
 	// Verify stderr got the message
 	stderrOutput := stderrBuf.String()
@@ -173,12 +188,11 @@ func TestLogWarning_DualWrite(t *testing.T) {
 }
 
 func TestLogError_DualWrite(t *testing.T) {
-	defer resetDebugState()
+	resetDebugState(t)
 
 	tmpFile := filepath.Join(t.TempDir(), "otel-helper-test.log")
-	os.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
-	defer os.Unsetenv("OTEL_HELPER_LOG_FILE")
-	os.Unsetenv("DEBUG_MODE")
+	t.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "")
 
 	initDebug()
 
@@ -196,7 +210,6 @@ func TestLogError_DualWrite(t *testing.T) {
 	stderrBuf.ReadFrom(r)
 
 	closeDebug()
-	logFile = nil
 
 	// Verify stderr got the message
 	stderrOutput := stderrBuf.String()
@@ -215,13 +228,11 @@ func TestLogError_DualWrite(t *testing.T) {
 }
 
 func TestDebugPrint_FileOnly(t *testing.T) {
-	defer resetDebugState()
+	resetDebugState(t)
 
 	tmpFile := filepath.Join(t.TempDir(), "otel-helper-test.log")
-	os.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
-	defer os.Unsetenv("OTEL_HELPER_LOG_FILE")
-	os.Setenv("DEBUG_MODE", "true")
-	defer os.Unsetenv("DEBUG_MODE")
+	t.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "true")
 
 	initDebug()
 
@@ -239,7 +250,6 @@ func TestDebugPrint_FileOnly(t *testing.T) {
 	stderrBuf.ReadFrom(r)
 
 	closeDebug()
-	logFile = nil
 
 	// Verify stderr did NOT get the debug message
 	stderrOutput := stderrBuf.String()
@@ -258,13 +268,11 @@ func TestDebugPrint_FileOnly(t *testing.T) {
 }
 
 func TestLogInfo_FileOnly(t *testing.T) {
-	defer resetDebugState()
+	resetDebugState(t)
 
 	tmpFile := filepath.Join(t.TempDir(), "otel-helper-test.log")
-	os.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
-	defer os.Unsetenv("OTEL_HELPER_LOG_FILE")
-	os.Setenv("DEBUG_MODE", "true")
-	defer os.Unsetenv("DEBUG_MODE")
+	t.Setenv("OTEL_HELPER_LOG_FILE", tmpFile)
+	t.Setenv("DEBUG_MODE", "true")
 
 	initDebug()
 
@@ -282,7 +290,6 @@ func TestLogInfo_FileOnly(t *testing.T) {
 	stderrBuf.ReadFrom(r)
 
 	closeDebug()
-	logFile = nil
 
 	// Verify stderr did NOT get the info message
 	stderrOutput := stderrBuf.String()

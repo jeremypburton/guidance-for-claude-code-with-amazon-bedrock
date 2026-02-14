@@ -64,7 +64,7 @@ func TestInitDebug_LogFile(t *testing.T) {
 
 	// Write a debug message and verify it lands in the file
 	DebugPrint("file test message")
-	LogFile.Close()
+	CloseDebug()
 
 	data, err := os.ReadFile(tmpFile)
 	if err != nil {
@@ -112,25 +112,57 @@ func TestCloseDebug_NilSafe(t *testing.T) {
 	CloseDebug()
 }
 
-func TestErrorPrint_DualWrite(t *testing.T) {
+func TestCloseDebug_ResetsState(t *testing.T) {
 	resetDebugState(t)
-	tmpFile := filepath.Join(t.TempDir(), "error.log")
+	tmpFile := filepath.Join(t.TempDir(), "test.log")
+	t.Setenv("CREDENTIAL_PROCESS_LOG_FILE", tmpFile)
+
+	InitDebug()
+	CloseDebug()
+
+	if LogFile != nil {
+		t.Error("CloseDebug() should nil out LogFile")
+	}
+	if LogWriter != os.Stderr {
+		t.Error("CloseDebug() should reset LogWriter to os.Stderr")
+	}
+}
+
+func TestStatusPrint_DualWrite(t *testing.T) {
+	resetDebugState(t)
+	tmpFile := filepath.Join(t.TempDir(), "status.log")
 	t.Setenv("CREDENTIAL_PROCESS_LOG_FILE", tmpFile)
 
 	InitDebug()
 
-	// ErrorPrint writes to both stderr and the log file.
-	// We can't easily capture stderr in this test, but we can verify
-	// the log file gets the message.
-	ErrorPrint("Error: something broke %d\n", 42)
-	LogFile.Close()
+	// Capture stderr
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
 
+	StatusPrint("Error: something broke %d\n", 42)
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	var stderrBuf bytes.Buffer
+	stderrBuf.ReadFrom(r)
+
+	CloseDebug()
+
+	// Verify stderr got the message
+	stderrOutput := stderrBuf.String()
+	if !strings.Contains(stderrOutput, "Error: something broke 42") {
+		t.Errorf("stderr should contain status message, got: %q", stderrOutput)
+	}
+
+	// Verify log file also got the message
 	data, err := os.ReadFile(tmpFile)
 	if err != nil {
 		t.Fatalf("failed to read log file: %v", err)
 	}
 	if !strings.Contains(string(data), "Error: something broke 42") {
-		t.Errorf("expected error message in log file, got: %q", string(data))
+		t.Errorf("expected status message in log file, got: %q", string(data))
 	}
 }
 
@@ -142,9 +174,28 @@ func TestDebugPrint_FileOnly(t *testing.T) {
 	InitDebug()
 	Debug = true
 
-	DebugPrint("debug only message")
-	LogFile.Close()
+	// Capture stderr
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
 
+	DebugPrint("debug only message")
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	var stderrBuf bytes.Buffer
+	stderrBuf.ReadFrom(r)
+
+	CloseDebug()
+
+	// Verify stderr did NOT get the debug message
+	stderrOutput := stderrBuf.String()
+	if strings.Contains(stderrOutput, "debug only message") {
+		t.Errorf("stderr should NOT contain debug message when log file is active, got: %q", stderrOutput)
+	}
+
+	// Verify log file got the message
 	data, err := os.ReadFile(tmpFile)
 	if err != nil {
 		t.Fatalf("failed to read log file: %v", err)
@@ -154,12 +205,12 @@ func TestDebugPrint_FileOnly(t *testing.T) {
 	}
 }
 
-func TestErrorPrint_NoLogFile(t *testing.T) {
+func TestStatusPrint_NoLogFile(t *testing.T) {
 	resetDebugState(t)
-	// With no log file, ErrorPrint should write to stderr only (no panic)
+	// With no log file, StatusPrint should write to stderr only (no panic)
 	LogFile = nil
 	LogWriter = os.Stderr
 
 	// Should not panic
-	ErrorPrint("stderr only error\n")
+	StatusPrint("stderr only message\n")
 }
