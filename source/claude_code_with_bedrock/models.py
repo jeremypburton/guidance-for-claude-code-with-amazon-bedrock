@@ -86,6 +86,68 @@ CLAUDE_MODELS = {
                     "sa-east-1",
                 ],
             },
+            "au": {
+                "model_id": "au.anthropic.claude-opus-4-6-v1",
+                "description": "AU CRIS",
+                "source_regions": [
+                    # North America
+                    "us-east-1",  # N. Virginia
+                    "us-east-2",  # Ohio
+                    "us-west-2",  # Oregon
+                    "us-west-1",  # N. California
+                    "ca-central-1",  # Canada Central
+                    # Europe
+                    "eu-central-1",  # Frankfurt
+                    "eu-central-2",  # Zurich
+                    "eu-north-1",  # Stockholm
+                    "eu-west-1",  # Ireland
+                    "eu-west-2",  # London
+                    "eu-west-3",  # Paris
+                    "eu-south-2",  # Milan
+                    "eu-south-3",  # Spain
+                    # Asia Pacific
+                    "ap-southeast-3",  # Jakarta
+                    "ap-northeast-1",  # Tokyo
+                    "ap-northeast-2",  # Seoul
+                    "ap-northeast-3",  # Osaka
+                    "ap-south-1",  # Mumbai
+                    "ap-south-5",  # Hyderabad
+                    "ap-southeast-1",  # Singapore
+                    "ap-southeast-4",  # Melbourne
+                    "ap-southeast-2",  # Sydney
+                    # South America
+                    "sa-east-1",  # São Paulo
+                ],
+                "destination_regions": [
+                    # North America
+                    "us-east-1",
+                    "us-east-2",
+                    "us-west-2",
+                    "us-west-1",
+                    "ca-central-1",
+                    # Europe
+                    "eu-central-1",
+                    "eu-central-2",
+                    "eu-north-1",
+                    "eu-west-1",
+                    "eu-west-2",
+                    "eu-west-3",
+                    "eu-south-2",
+                    "eu-south-3",
+                    # Asia Pacific
+                    "ap-southeast-3",
+                    "ap-northeast-1",
+                    "ap-northeast-2",
+                    "ap-northeast-3",
+                    "ap-south-1",
+                    "ap-south-5",
+                    "ap-southeast-1",
+                    "ap-southeast-4",
+                    "ap-southeast-2",
+                    # South America
+                    "sa-east-1",
+                ],
+            },
         },
     },
     "opus-4-5": {

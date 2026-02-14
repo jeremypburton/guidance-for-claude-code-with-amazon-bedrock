@@ -71,6 +71,24 @@ Parameters:
     Default: ''
     Description: Secrets Manager ARN for Auth0 client secret
 
+  # Jumpcloud parameters
+  JumpCloudDomain:
+    Type: String
+    Description: Your JumpCloud domain 
+    AllowedPattern: '^oauth.id.jumpcloud.com$'
+    ConstraintDescription: Must be a valid JumpCloud domain
+
+  JumpCloudClientId:
+    Type: String
+    Description: Auth0 application client ID
+    AllowedPattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+    ConstraintDescription: Must be a valid JumpCloud client ID
+
+  JumpCloudClientSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN for JumpCloud client secret
+
   # Cognito parameters
   CognitoUserPoolId:
     Type: String

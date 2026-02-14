@@ -211,6 +211,8 @@ def extract_user_info(payload):
         or "user"
     )
 
+    company = payload.get("company")
+
     return {
         "email": email,
         "user_id": user_id,
@@ -225,6 +227,7 @@ def extract_user_info(payload):
         "account_uuid": payload.get("aud", ""),
         "issuer": payload.get("iss", ""),
         "subject": payload.get("sub", ""),
+        "company": company
     }
 
 
@@ -243,6 +246,7 @@ def format_as_headers_dict(attributes):
         "location": "x-location",
         "role": "x-role",
         "manager": "x-manager",
+        "company": "x-company",
     }
 
     headers = {}
