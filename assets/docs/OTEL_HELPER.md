@@ -57,7 +57,7 @@ Both produce identical output for the same input token.
 |-----------|------|
 | **Claude Code** | Calls `otelHeadersHelper` binary, attaches returned headers to OTLP metric exports |
 | **OTEL Helper** | Decodes JWT, extracts user attributes, formats as HTTP headers JSON |
-| **Credential Process** | Provides the JWT monitoring token when not available in the environment |
+| **Credential Process** | Provides the JWT monitoring token when not available in the environment (see [Credential Helper docs](credential-helper.md)) |
 | **OTEL Collector** | Receives OTLP metrics + headers, maps headers to resource attributes, exports to CloudWatch |
 | **CloudWatch** | Stores metrics with user/org dimensions for dashboards and alerting |
 
@@ -295,31 +295,6 @@ Located in `source/otel-helper-go/`. This is the version compiled and distribute
 - Cross-compiled for 5 platforms: macOS ARM64/Intel, Linux x64/ARM64, Windows
 - Returns exit code 1 on failure (no token, decode error), exit code 0 on success
 
-### Credential Process (Go)
-
-Located in `source/credential-provider-go/`. This is the binary that handles OIDC authentication, token caching, and AWS credential federation.
-
-| File | Purpose |
-|------|---------|
-| `main.go` | Entry point, CLI flag parsing, orchestrates auth and credential flows |
-| `auth/oauth.go` | PKCE generation, OIDC browser flow, authorization code exchange, refresh token grant |
-| `config/` | Profile configuration loading, auto-detection |
-| `credentials/` | AWS credential caching (read/write/expiry check) |
-| `federation/` | Token-to-AWS-credential exchange via STS |
-| `internal/debug.go` | Logging utilities, `DEBUG_MODE` / `CREDENTIAL_PROCESS_LOG_FILE` initialization |
-| `internal/jwt.go` | Unverified JWT decoding for claim extraction |
-| `locking/` | Port-based lock to prevent concurrent browser auth flows |
-| `monitoring/monitoring.go` | Monitoring token and refresh token persistence, token expiry checks |
-| `provider/` | OIDC provider type detection and per-provider configuration (Cognito, Okta, Auth0, Azure, JumpCloud) |
-| `quota/` | Quota API checks, warning/blocking enforcement |
-
-**Key properties:**
-- Supports silent token refresh via OIDC refresh tokens, avoiding repeated browser authentication
-- `offline_access` scope is included in all provider configurations to request refresh tokens
-- Refresh tokens are persisted alongside monitoring tokens and used automatically when the ID token expires
-- If silent refresh fails, falls back to browser-based authentication
-- Debug logging controlled by `DEBUG_MODE` environment variable (disabled by default)
-
 ### Python Implementation (Reference)
 
 Located in `source/otel_helper/__main__.py`. Single-file implementation (384 lines).
@@ -333,37 +308,33 @@ Functionally identical to the Go version. Useful for debugging with `--test` or 
 ### End-to-End Path
 
 ```
-1. Credential Provider authenticates user via OIDC
-   (browser flow on first use; silent refresh token grant thereafter)
-         |
-         v
-2. JWT ID token + refresh token cached on disk
+1. Credential process authenticates user via OIDC (see credential-helper.md)
    Token available via environment (CLAUDE_CODE_MONITORING_TOKEN)
    or via credential-process --get-monitoring-token
          |
          v
-3. Claude Code calls otel-helper binary (configured via otelHeadersHelper in settings.json)
+2. Claude Code calls otel-helper binary (configured via otelHeadersHelper in settings.json)
          |
          v
-4. OTEL Helper decodes JWT, extracts claims, outputs JSON headers to stdout
+3. OTEL Helper decodes JWT, extracts claims, outputs JSON headers to stdout
          |
          v
-5. Claude Code attaches headers to OTLP HTTP requests
+4. Claude Code attaches headers to OTLP HTTP requests
          |
          v
-6. ALB forwards to OTEL Collector (ECS Fargate, port 4318)
+5. ALB forwards to OTEL Collector (ECS Fargate, port 4318)
          |
          v
-7. Collector's attributes processor maps x-* headers to resource attributes
+6. Collector's attributes processor maps x-* headers to resource attributes
          |
          v
-8. Collector's resource processor adds aws.account_id, deployment.environment
+7. Collector's resource processor adds aws.account_id, deployment.environment
          |
          v
-9. awsemf exporter writes to CloudWatch (namespace: ClaudeCode, log group: /aws/claude-code/metrics)
+8. awsemf exporter writes to CloudWatch (namespace: ClaudeCode, log group: /aws/claude-code/metrics)
          |
          v
-10. CloudWatch Dashboard visualizes metrics with user/team/department dimensions
+9. CloudWatch Dashboard visualizes metrics with user/team/department dimensions
 ```
 
 ### Metric Types Flowing Through This Path
@@ -464,28 +435,29 @@ The issuer string is parsed as a URL. If no scheme is present, `https://` is pre
 
 ## Debug Logging
 
-Both the OTEL Helper and Credential Process share the same debug logging pattern. Debug output is disabled by default and must be explicitly enabled.
+Debug output is disabled by default and must be explicitly enabled.
 
 ### Enabling Debug Output
 
-Set `DEBUG_MODE` to enable verbose logging for either component:
+Set `DEBUG_MODE` to enable verbose logging:
 
 ```bash
 export DEBUG_MODE=true   # also accepts: 1, yes, y (case-insensitive)
 ```
 
+Alternatively, pass `--test` or `--verbose` flags to the binary.
+
 ### Log File Redirection
 
-Each component has its own log file environment variable:
+Set `OTEL_HELPER_LOG_FILE` to redirect log output to a file:
 
-| Component | Variable | Effect |
-|-----------|----------|--------|
-| OTEL Helper | `OTEL_HELPER_LOG_FILE` | Debug/info messages go to file; warnings/errors go to both stderr and file |
-| Credential Process | `CREDENTIAL_PROCESS_LOG_FILE` | Debug messages go to file; status/error messages go to both stderr and file |
+```bash
+export OTEL_HELPER_LOG_FILE=/tmp/otel-helper.log
+```
 
 When a log file is configured:
-- Debug-level messages (gated on `DEBUG_MODE`) write only to the file, keeping the terminal clean
-- User-facing messages (warnings, errors, status) always appear on stderr and are additionally written to the file
+- Debug-level and info messages (gated on `DEBUG_MODE`) write only to the file, keeping the terminal clean
+- Warnings and errors always appear on stderr and are additionally written to the file
 - If the file cannot be opened, a warning is printed to stderr and logging falls back to stderr only
 
 ### Log Message Format
@@ -493,14 +465,14 @@ When a log file is configured:
 All log messages are prefixed with an ISO 8601 timestamp with millisecond precision:
 
 ```
-2026-02-15T14:30:05.123Z [DEBUG] Attempting silent token refresh for profile 'ClaudeCode'...
-2026-02-15T14:30:05.456Z [WARNING] Silent refresh failed, falling back to browser auth: token expired
-2026-02-15T14:30:06.789Z [INFO] Opening browser for Okta authentication...
+2026-02-15T14:30:05.123Z [DEBUG] Decoding JWT payload...
+2026-02-15T14:30:05.124Z [INFO] Extracted user info: email=<email-redacted>
+2026-02-15T14:30:05.125Z [WARNING] No token available from environment or credential process
 ```
 
 ### Log Output Levels
 
-**OTEL Helper** (`source/otel-helper-go/debug.go`):
+Defined in `source/otel-helper-go/debug.go`:
 
 | Function | Level | Gate | Destination |
 |----------|-------|------|-------------|
@@ -508,13 +480,6 @@ All log messages are prefixed with an ISO 8601 timestamp with millisecond precis
 | `logInfo()` | INFO | `DEBUG_MODE` | logWriter (file or stderr) |
 | `logWarning()` | WARNING | Always | stderr + file (if set) |
 | `logError()` | ERROR | Always | stderr + file (if set) |
-
-**Credential Process** (`source/credential-provider-go/internal/debug.go`):
-
-| Function | Level | Gate | Destination |
-|----------|-------|------|-------------|
-| `DebugPrint()` | DEBUG | `DEBUG_MODE` | LogWriter (file or stderr) |
-| `StatusPrint()` | STATUS | Always | stderr + file (if set) |
 
 ## Infrastructure Integration
 
@@ -617,14 +582,13 @@ The `settings.json` references this path:
 | Variable | Purpose | Set by |
 |----------|---------|--------|
 | `CLAUDE_CODE_MONITORING_TOKEN` | JWT token for user attribution (preferred, avoids subprocess call) | Credential Provider |
-| `AWS_PROFILE` | Profile name passed to `credential-process --profile` | Claude Code settings.json |
-| `DEBUG_MODE` | Enable debug logging for both OTEL Helper and Credential Process. Accepted values (case-insensitive): `true`, `1`, `yes`, `y`. Disabled by default for both components. | Manual |
-| `OTEL_HELPER_LOG_FILE` | File path for OTEL Helper log output. When set, debug/info messages write to this file instead of stderr. Warnings and errors always appear on stderr and are additionally written to the file. If the file cannot be opened, falls back to stderr. | Manual |
-| `CREDENTIAL_PROCESS_LOG_FILE` | File path for Credential Process log output. When set, debug messages write to this file instead of stderr. User-facing status/error messages (`StatusPrint`) always appear on stderr and are additionally written to the file. If the file cannot be opened, falls back to stderr. | Manual |
+| `AWS_PROFILE` | Profile name passed to `credential-process --profile` when falling back to subprocess | Claude Code settings.json |
+| `DEBUG_MODE` | Enable debug logging. Accepted values (case-insensitive): `true`, `1`, `yes`, `y`. Disabled by default. | Manual |
+| `OTEL_HELPER_LOG_FILE` | File path for log output. When set, debug/info messages write to this file instead of stderr. Warnings and errors always appear on stderr and are additionally written to the file. | Manual |
+
+For credential-process environment variables, see the [Credential Helper docs](credential-helper.md#environment-variables).
 
 ### CLI Arguments
-
-#### OTEL Helper
 
 ```
 otel-helper [--test] [--verbose]
@@ -637,23 +601,7 @@ otel-helper [--test] [--verbose]
 
 Both flags enable debug mode. In normal operation (no flags), only the JSON header object is written to stdout.
 
-#### Credential Process
-
-```
-credential-process [--profile NAME] [--get-monitoring-token] [--clear-cache]
-                   [--check-expiration] [--refresh-if-needed] [--version]
-```
-
-| Flag | Effect |
-|------|--------|
-| `--profile`, `-p` | Configuration profile name (falls back to `CCWB_PROFILE` env, auto-detect, then `ClaudeCode`) |
-| `--get-monitoring-token` | Return the cached monitoring JWT token; triggers authentication if none cached |
-| `--clear-cache` | Remove cached credentials for the given profile |
-| `--check-expiration` | Exit 1 if credentials are expired/missing, exit 0 if valid |
-| `--refresh-if-needed` | Refresh credentials if expired (session storage mode only) |
-| `--version`, `-v` | Print version and exit |
-
-In normal operation (no special flags), the credential process performs OIDC authentication and outputs AWS credentials as JSON to stdout. Silent token refresh is attempted automatically when a refresh token is available, falling back to browser authentication only when necessary.
+For credential-process CLI arguments, see the [Credential Helper docs](credential-helper.md#cli-reference).
 
 ### Settings.json Integration
 
@@ -680,7 +628,8 @@ In normal operation (no special flags), the credential process performs OIDC aut
 - The JWT signature is **not verified** by the OTEL Helper. The token comes from a trusted source (credential-process or the credential provider's environment variable). Signature verification happens at the OIDC provider level during authentication.
 - Tokens are never written to disk or logged in normal mode. When `OTEL_HELPER_LOG_FILE` is set with debug mode active, the log file will contain redacted JWT payloads (sensitive fields like `email`, `sub` are replaced with `<field-redacted>`).
 - The credential-process call has a 300-second timeout to prevent hangs.
-- **Refresh tokens** are stored alongside the monitoring token on disk by the credential process. They are used for silent token renewal and are never logged or exposed via stdout. If the OIDC provider rotates the refresh token during a grant, the new token replaces the old one.
+
+For details on how the credential process handles token storage, refresh tokens, and silent renewal, see the [Credential Helper docs](credential-helper.md#silent-token-refresh).
 
 ### Failure Behavior
 
