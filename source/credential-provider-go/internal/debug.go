@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // Debug controls whether debug messages are emitted via DebugPrint.
@@ -51,10 +52,15 @@ func CloseDebug() {
 	}
 }
 
+// timestamp returns the current time formatted for log messages.
+func timestamp() string {
+	return time.Now().Format("2006-01-02T15:04:05.000Z07:00")
+}
+
 // DebugPrint writes a debug message to LogWriter if debug mode is enabled.
 func DebugPrint(format string, args ...interface{}) {
 	if Debug {
-		fmt.Fprintf(LogWriter, "Debug: "+format+"\n", args...)
+		fmt.Fprintf(LogWriter, "%s Debug: "+format+"\n", append([]interface{}{timestamp()}, args...)...)
 	}
 }
 
@@ -62,7 +68,7 @@ func DebugPrint(format string, args ...interface{}) {
 // When a log file is active, also writes to the log file for completeness.
 // Unlike DebugPrint, this is not gated on the Debug flag — messages always appear.
 func StatusPrint(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
+	msg := fmt.Sprintf("%s "+format, append([]interface{}{timestamp()}, args...)...)
 	fmt.Fprint(os.Stderr, msg)
 	if LogFile != nil {
 		fmt.Fprint(LogWriter, msg)

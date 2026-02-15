@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 var (
@@ -43,17 +44,22 @@ func closeDebug() {
 	}
 }
 
+// timestamp returns the current time formatted for log messages.
+func timestamp() string {
+	return time.Now().Format("2006-01-02T15:04:05.000Z07:00")
+}
+
 // debugPrint writes a debug message to logWriter if debug mode is enabled.
 func debugPrint(format string, args ...interface{}) {
 	if debugMode {
-		fmt.Fprintf(logWriter, "[DEBUG] "+format+"\n", args...)
+		fmt.Fprintf(logWriter, "%s [DEBUG] "+format+"\n", append([]interface{}{timestamp()}, args...)...)
 	}
 }
 
 // logWarning writes a warning message to stderr.
 // When a log file is active, also writes to the log file.
 func logWarning(format string, args ...interface{}) {
-	msg := fmt.Sprintf("[WARNING] "+format+"\n", args...)
+	msg := fmt.Sprintf("%s [WARNING] "+format+"\n", append([]interface{}{timestamp()}, args...)...)
 	fmt.Fprint(os.Stderr, msg)
 	if logFile != nil {
 		fmt.Fprint(logWriter, msg)
@@ -63,7 +69,7 @@ func logWarning(format string, args ...interface{}) {
 // logError writes an error message to stderr.
 // When a log file is active, also writes to the log file.
 func logError(format string, args ...interface{}) {
-	msg := fmt.Sprintf("[ERROR] "+format+"\n", args...)
+	msg := fmt.Sprintf("%s [ERROR] "+format+"\n", append([]interface{}{timestamp()}, args...)...)
 	fmt.Fprint(os.Stderr, msg)
 	if logFile != nil {
 		fmt.Fprint(logWriter, msg)
@@ -73,6 +79,6 @@ func logError(format string, args ...interface{}) {
 // logInfo writes an info message to logWriter if debug mode is enabled.
 func logInfo(format string, args ...interface{}) {
 	if debugMode {
-		fmt.Fprintf(logWriter, "[INFO] "+format+"\n", args...)
+		fmt.Fprintf(logWriter, "%s [INFO] "+format+"\n", append([]interface{}{timestamp()}, args...)...)
 	}
 }

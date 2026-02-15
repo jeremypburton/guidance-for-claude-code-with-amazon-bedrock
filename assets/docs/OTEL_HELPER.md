@@ -488,6 +488,16 @@ When a log file is configured:
 - User-facing messages (warnings, errors, status) always appear on stderr and are additionally written to the file
 - If the file cannot be opened, a warning is printed to stderr and logging falls back to stderr only
 
+### Log Message Format
+
+All log messages are prefixed with an ISO 8601 timestamp with millisecond precision:
+
+```
+2026-02-15T14:30:05.123Z [DEBUG] Attempting silent token refresh for profile 'ClaudeCode'...
+2026-02-15T14:30:05.456Z [WARNING] Silent refresh failed, falling back to browser auth: token expired
+2026-02-15T14:30:06.789Z [INFO] Opening browser for Okta authentication...
+```
+
 ### Log Output Levels
 
 **OTEL Helper** (`source/otel-helper-go/debug.go`):
