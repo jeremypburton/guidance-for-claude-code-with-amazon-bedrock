@@ -385,6 +385,9 @@ Resources:
               - key: manager
                 from_context: metadata.x-manager
                 action: upsert
+              - key: company
+                from_context: metadata.x-company
+                action: upsert
           # Add AWS account ID to all metrics
           resource:
             attributes:
@@ -416,6 +419,8 @@ Resources:
               - dimensions: [[team.id, OTelLib]]
                 metric_name_selectors: [".*"]
               - dimensions: [[organization, OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[company, OTelLib]]
                 metric_name_selectors: [".*"]
 
               # Model usage tracking
@@ -516,6 +521,9 @@ Resources:
               - key: manager
                 from_context: metadata.x-manager
                 action: upsert
+              - key: company
+                from_context: metadata.x-company
+                action: upsert
           resource:
             attributes:
               - key: aws.account_id
@@ -543,6 +551,8 @@ Resources:
               - dimensions: [[team.id, OTelLib]]
                 metric_name_selectors: [".*"]
               - dimensions: [[organization, OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[company, OTelLib]]
                 metric_name_selectors: [".*"]
               - dimensions: [[model, OTelLib]]
                 metric_name_selectors: [".*"]
