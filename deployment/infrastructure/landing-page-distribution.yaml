@@ -20,7 +20,7 @@ Parameters:
 
   IdPProvider:
     Type: String
-    AllowedValues: [okta, azure, auth0, cognito]
+    AllowedValues: [okta, azure, auth0, cognito, jumpcloud]
     Description: Identity provider type
 
   # Okta parameters
@@ -71,18 +71,16 @@ Parameters:
     Default: ''
     Description: Secrets Manager ARN for Auth0 client secret
 
-  # Jumpcloud parameters
+  # JumpCloud parameters
   JumpCloudDomain:
     Type: String
-    Description: Your JumpCloud domain 
-    AllowedPattern: '^oauth.id.jumpcloud.com$'
-    ConstraintDescription: Must be a valid JumpCloud domain
+    Default: ''
+    Description: JumpCloud domain (e.g., oauth.id.jumpcloud.com)
 
   JumpCloudClientId:
     Type: String
-    Description: Auth0 application client ID
-    AllowedPattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
-    ConstraintDescription: Must be a valid JumpCloud client ID
+    Default: ''
+    Description: JumpCloud application client ID
 
   JumpCloudClientSecretArn:
     Type: String
@@ -131,6 +129,7 @@ Conditions:
   IsOkta: !Equals [!Ref IdPProvider, 'okta']
   IsAzure: !Equals [!Ref IdPProvider, 'azure']
   IsAuth0: !Equals [!Ref IdPProvider, 'auth0']
+  IsJumpCloud: !Equals [!Ref IdPProvider, 'jumpcloud']
   IsCognito: !Equals [!Ref IdPProvider, 'cognito']
   HasRoute53Zone: !Not [!Equals [!Ref HostedZoneId, '']]
 
@@ -193,7 +192,7 @@ Resources:
           - Sid: AWSLogDeliveryWrite
             Effect: Allow
             Principal:
-              AWS: !Sub 'arn:aws:iam::127311923021:root'  # ELB service account for us-east-1
+              Service: logdelivery.elasticloadbalancing.amazonaws.com
             Action: s3:PutObject
             Resource: !Sub '${ALBLogsBucket.Arn}/*'
           - Sid: AWSLogDeliveryAclCheck
@@ -816,7 +815,10 @@ Resources:
                 - !If
                   - IsAuth0
                   - !Sub 'https://${Auth0Domain}'
-                  - !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}'
+                  - !If
+                    - IsJumpCloud
+                    - !Sub 'https://${JumpCloudDomain}'
+                    - !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}'
             AuthorizationEndpoint: !If
               - IsOkta
               - !Sub 'https://${OktaDomain}/oauth2/v1/authorize'
@@ -826,7 +828,10 @@ Resources:
                 - !If
                   - IsAuth0
                   - !Sub 'https://${Auth0Domain}/authorize'
-                  - !Sub 'https://${CognitoUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/authorize'
+                  - !If
+                    - IsJumpCloud
+                    - !Sub 'https://${JumpCloudDomain}/oauth2/auth'
+                    - !Sub 'https://${CognitoUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/authorize'
             TokenEndpoint: !If
               - IsOkta
               - !Sub 'https://${OktaDomain}/oauth2/v1/token'
@@ -836,7 +841,10 @@ Resources:
                 - !If
                   - IsAuth0
                   - !Sub 'https://${Auth0Domain}/oauth/token'
-                  - !Sub 'https://${CognitoUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/token'
+                  - !If
+                    - IsJumpCloud
+                    - !Sub 'https://${JumpCloudDomain}/oauth2/token'
+                    - !Sub 'https://${CognitoUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/token'
             UserInfoEndpoint: !If
               - IsOkta
               - !Sub 'https://${OktaDomain}/oauth2/v1/userinfo'
@@ -846,7 +854,10 @@ Resources:
                 - !If
                   - IsAuth0
                   - !Sub 'https://${Auth0Domain}/userinfo'
-                  - !Sub 'https://${CognitoUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/userInfo'
+                  - !If
+                    - IsJumpCloud
+                    - !Sub 'https://${JumpCloudDomain}/userinfo'
+                    - !Sub 'https://${CognitoUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/userInfo'
             ClientId: !If
               - IsOkta
               - !Ref OktaClientId
@@ -856,7 +867,10 @@ Resources:
                 - !If
                   - IsAuth0
                   - !Ref Auth0ClientId
-                  - !Ref CognitoClientId
+                  - !If
+                    - IsJumpCloud
+                    - !Ref JumpCloudClientId
+                    - !Ref CognitoClientId
             ClientSecret: !If
               - IsOkta
               - !Sub '{{resolve:secretsmanager:${OktaClientSecretArn}:SecretString}}'
@@ -866,7 +880,10 @@ Resources:
                 - !If
                   - IsAuth0
                   - !Sub '{{resolve:secretsmanager:${Auth0ClientSecretArn}:SecretString}}'
-                  - !Sub '{{resolve:secretsmanager:${CognitoClientSecretArn}:SecretString}}'
+                  - !If
+                    - IsJumpCloud
+                    - !Sub '{{resolve:secretsmanager:${JumpCloudClientSecretArn}:SecretString}}'
+                    - !Sub '{{resolve:secretsmanager:${CognitoClientSecretArn}:SecretString}}'
             SessionTimeout: 43200  # 12 hours
             Scope: 'openid email profile'
             OnUnauthenticatedRequest: authenticate

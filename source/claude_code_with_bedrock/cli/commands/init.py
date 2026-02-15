@@ -302,6 +302,7 @@ class InitCommand(Command):
                 or "Invalid provider domain format (e.g., company.okta.com)",
                 instruction=(
                     "(e.g., company.okta.com, company.auth0.com, "
+                    "oauth.id.jumpcloud.com, "
                     "login.microsoftonline.com/{tenant-id}/v2.0, "
                     "my-app.auth.us-east-1.amazoncognito.com, or "
                     "my-app.auth-fips.us-gov-west-1.amazoncognito.com for GovCloud)"
@@ -338,7 +339,7 @@ class InitCommand(Command):
                     # Using endswith with leading dot prevents bypass attacks
                     if hostname_lower.endswith(".okta.com") or hostname_lower == "okta.com":
                         provider_type = "okta"
-                    if hostname_lower.endswith(".jumpcloud.com") or hostname_lower == "jumpcloud.com":
+                    elif hostname_lower.endswith(".jumpcloud.com") or hostname_lower == "jumpcloud.com":
                         provider_type = "jumpcloud"
                     elif hostname_lower.endswith(".auth0.com") or hostname_lower == "auth0.com":
                         provider_type = "auth0"
@@ -808,6 +809,7 @@ class InitCommand(Command):
                 questionary.Choice("Okta", value="okta"),
                 questionary.Choice("Azure AD / Entra ID", value="azure"),
                 questionary.Choice("Auth0", value="auth0"),
+                questionary.Choice("JumpCloud", value="jumpcloud"),
                 questionary.Choice("AWS Cognito User Pool", value="cognito"),
             ]
 
@@ -894,14 +896,14 @@ class InitCommand(Command):
             if not cognito_auto_configured:
                 # IdP domain
                 idp_domain = questionary.text(
-                    "IdP domain (e.g., company.okta.com for Okta, company.auth0.com for Auth0):",
-                    default=config.get("distribution", {}).get("idp_domain", ""),
+                    "IdP domain (e.g., company.okta.com for Okta, company.auth0.com for Auth0, oauth.id.jumpcloud.com for JumpCloud):",
+                    default=config.get("distribution", {}).get("idp_domain") or "",
                 ).ask()
 
                 # Web app client ID
                 idp_client_id = questionary.text(
                     "Web application client ID (separate from CLI native app):",
-                    default=config.get("distribution", {}).get("idp_client_id", ""),
+                    default=config.get("distribution", {}).get("idp_client_id") or "",
                 ).ask()
 
                 # Web app client secret
@@ -952,8 +954,8 @@ class InitCommand(Command):
 
             custom_domain = questionary.text(
                 "Custom domain (e.g., downloads.company.com):",
-                default=config.get("distribution", {}).get("custom_domain", ""),
-                validate=lambda text: len(text.strip()) > 0
+                default=config.get("distribution", {}).get("custom_domain") or "",
+                validate=lambda text: bool(text and len(text.strip()) > 0)
                 or "Custom domain is required for authenticated landing page",
             ).ask()
 

@@ -423,6 +423,10 @@ Resources:
               - dimensions: [[company, OTelLib]]
                 metric_name_selectors: [".*"]
 
+              # CCWB version tracking (git SHA at package time)
+              - dimensions: [[ccwb.version, OTelLib]]
+                metric_name_selectors: [".*"]
+
               # Model usage tracking
               - dimensions: [[model, OTelLib]]
                 metric_name_selectors: [".*"]
@@ -553,6 +557,8 @@ Resources:
               - dimensions: [[organization, OTelLib]]
                 metric_name_selectors: [".*"]
               - dimensions: [[company, OTelLib]]
+                metric_name_selectors: [".*"]
+              - dimensions: [[ccwb.version, OTelLib]]
                 metric_name_selectors: [".*"]
               - dimensions: [[model, OTelLib]]
                 metric_name_selectors: [".*"]

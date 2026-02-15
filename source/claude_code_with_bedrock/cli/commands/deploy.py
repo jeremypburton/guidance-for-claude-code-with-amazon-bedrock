@@ -513,6 +513,15 @@ class DeployCommand(Command):
                                 f"Auth0ClientSecretArn={profile.distribution_idp_client_secret_arn}",
                             ]
                         )
+                    elif profile.distribution_idp_provider == "jumpcloud":
+                        params.extend(
+                            [
+                                f"JumpCloudDomain={profile.distribution_idp_domain}",
+                                f"JumpCloudClientId={profile.distribution_idp_client_id}",
+                                f"JumpCloudClientSecretArn=arn:aws:secretsmanager:ap-southeast-2:270263697953:secret:claude-code-auth-distribution-idp-secret-obg0oz", #{profile.distribution_idp_client_secret_arn}",
+                            ]
+                        )
+                        print(f"params: {params}")
                     elif profile.distribution_idp_provider == "cognito":
                         # Split domain to get user pool ID and domain prefix
                         params.extend(
