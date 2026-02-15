@@ -163,6 +163,9 @@ class PackageCommand(Command):
             )
         )
 
+        # Capture git SHA for version tracking in OTEL resource attributes
+        git_sha = self._get_git_sha()
+
         # Create timestamped output directory under profile name
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
         output_dir = Path("./dist") / profile_name / timestamp
@@ -177,7 +180,7 @@ class PackageCommand(Command):
             "region": profile.aws_region,
             "allowed_bedrock_regions": profile.allowed_bedrock_regions,
             "package_timestamp": timestamp,
-            "package_version": "1.0.0",
+            "package_version": f"1.0.0+{git_sha}",
             "federation_type": federation_type,
         }
 
@@ -253,7 +256,7 @@ class PackageCommand(Command):
 
         # Always create Claude Code settings (required for Bedrock configuration)
         console.print("[cyan]Creating Claude Code settings...[/cyan]")
-        self._create_claude_settings(output_dir, profile, include_coauthored_by, profile_name)
+        self._create_claude_settings(output_dir, profile, include_coauthored_by, profile_name, git_sha)
 
         # Summary
         console.print("\n[green]✓ Package created successfully![/green]")
@@ -490,6 +493,18 @@ class PackageCommand(Command):
         goos, goarch, binary_name = self.GO_OTEL_PLATFORM_MAP[target_platform]
         return self._build_go_binary_from(output_dir, goos, goarch, binary_name, "otel-helper-go")
 
+    def _get_git_sha(self) -> str:
+        """Get short git SHA of current HEAD, or 'unknown' if not in a git repo."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return "unknown"
 
     def _create_config(
         self,
@@ -1119,7 +1134,8 @@ Available metrics include:
             f.write(readme_content)
 
     def _create_claude_settings(
-        self, output_dir: Path, profile, include_coauthored_by: bool = True, profile_name: str = "ClaudeCode"
+        self, output_dir: Path, profile, include_coauthored_by: bool = True, profile_name: str = "ClaudeCode",
+        git_sha: str = "unknown",
     ):
         """Create Claude Code settings.json with Bedrock and optional monitoring configuration."""
         console = Console()
@@ -1202,8 +1218,11 @@ Available metrics include:
                                 "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
                                 "OTEL_LOG_TOOL_DETAILS": "1",
                                 # Add basic OTEL resource attributes for multi-team support
-                                "OTEL_RESOURCE_ATTRIBUTES": "department=engineering,team.id=default, \
-                                cost_center=default,organization=default",
+                                # Note: department is NOT included here — the otel-helper extracts
+                                # per-user department from the JWT token via the x-department header
+                                "OTEL_RESOURCE_ATTRIBUTES": f"team.id=default,"
+                                f"cost_center=default,organization=default,"
+                                f"ccwb.version={git_sha}",
                             }
                         )
 
