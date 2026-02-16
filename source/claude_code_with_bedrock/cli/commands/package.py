@@ -1217,6 +1217,7 @@ Available metrics include:
                                 "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
                                 "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
                                 "OTEL_LOG_TOOL_DETAILS": "1",
+                                "OTEL_METRICS_INCLUDE_VERSION": "true",
                                 # Add basic OTEL resource attributes for multi-team support
                                 # Note: department is NOT included here — the otel-helper extracts
                                 # per-user department from the JWT token via the x-department header
