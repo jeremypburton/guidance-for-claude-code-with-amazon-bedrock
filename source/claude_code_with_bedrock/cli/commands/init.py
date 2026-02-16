@@ -936,14 +936,19 @@ class InitCommand(Command):
                             SecretId=secret_name,
                             SecretString=idp_client_secret,
                         )
-                        secret_arn = f"arn:aws:secretsmanager:{region}:{account_id}:secret:{secret_name}"
+                        secret_arn = secret_response["ARN"]
 
                     console.print(f"[green]✓[/green] IdP client secret stored in Secrets Manager: {secret_name}")
 
                 except Exception as e:
                     console.print(f"[red]Error storing secret in Secrets Manager: {e}[/red]")
                     console.print("[yellow]You'll need to configure the secret manually before deployment[/yellow]")
-                    secret_arn = f"arn:aws:secretsmanager:{region}:{account_id}:secret:{secret_name}"
+                    # Try to retrieve the real ARN if the secret already exists
+                    try:
+                        describe_response = secrets_client.describe_secret(SecretId=secret_name)
+                        secret_arn = describe_response["ARN"]
+                    except Exception:
+                        secret_arn = f"arn:aws:secretsmanager:{region}:{account_id}:secret:{secret_name}"
 
             # Custom domain (REQUIRED for authenticated landing page)
             console.print("\n[bold]Custom Domain Configuration (REQUIRED)[/bold]")
