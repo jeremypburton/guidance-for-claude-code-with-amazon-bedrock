@@ -949,8 +949,8 @@ class MultiProviderAuth:
             if not federated_role_arn:
                 raise ValueError("federated_role_arn is required for direct STS federation")
 
-            # Create STS client
-            sts_client = boto3.client("sts", region_name=self.config["aws_region"])
+            # Create STS client with unsigned config (AssumeRoleWithWebIdentity doesn't need pre-existing credentials)
+            sts_client = boto3.client("sts", region_name=self.config["aws_region"], config=Config(signature_version=UNSIGNED))
 
             # Prepare session tags from token claims
             session_tags = []
