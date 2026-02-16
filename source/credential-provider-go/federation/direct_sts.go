@@ -11,6 +11,7 @@ import (
 	"credential-provider-go/credentials"
 	"credential-provider-go/internal"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/golang-jwt/jwt/v5"
@@ -40,7 +41,7 @@ func AssumeRoleWithWebIdentity(cfg *config.ProfileConfig, idToken string, claims
 	ctx := context.Background()
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(cfg.AWSRegion),
-		awsconfig.WithCredentialsProvider(nil),
+		awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AWS config: %w", err)
