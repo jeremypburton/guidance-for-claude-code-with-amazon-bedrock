@@ -510,11 +510,20 @@ Resources:
 
               # Generate platform cards
               platform_cards = []
+
+              # Platform icons (external SVGs from Wikimedia Commons)
+              platform_icons = {
+                  'mac': '<img src="https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg" alt="" class="platform-icon">',
+                  'windows': '<img src="https://upload.wikimedia.org/wikipedia/commons/8/87/Windows_logo_-_2021.svg" alt="" class="platform-icon">',
+                  'linux': '<img src="https://upload.wikimedia.org/wikipedia/commons/3/35/Tux.svg" alt="" class="platform-icon">',
+                  'all-platforms': '',
+              }
+
               platforms = [
-                  ('windows', '🪟 Windows', 'Download Windows-specific package'),
-                  ('linux', '🐧 Linux', 'Download Linux-specific package'),
-                  ('mac', '🍎 macOS', 'Download macOS-specific package'),
-                  ('all-platforms', '📦 All Platforms', 'Download all packages in one bundle'),
+                  ('mac', 'macOS', 'Download macOS-specific package'),
+                  ('windows', 'Windows', 'Download Windows-specific package'),
+                  ('linux', 'Linux', 'Download Linux-specific package'),
+                  ('all-platforms', 'All Platforms', 'Download all packages in one bundle'),
               ]
 
               for platform_key, platform_title, platform_desc in platforms:
@@ -522,11 +531,12 @@ Resources:
                       size_str = format_size(packages.get(platform_key, {}).get('size', 0))
                       # Check if this platform matches the detected OS
                       is_recommended = detected_os == platform_key
-                      recommended_badge = '<span class="recommended-badge">✨ Recommended for your system</span>' if is_recommended else ''
+                      recommended_badge = '<span class="recommended-badge">Recommended for your system</span>' if is_recommended else ''
                       card_class = 'platform-card recommended' if is_recommended else 'platform-card'
+                      icon = platform_icons.get(platform_key, '')
                       platform_cards.append(f'''
                       <div class="{card_class}">
-                          <h3>{platform_title} {recommended_badge}</h3>
+                          <h3>{icon} {platform_title} {recommended_badge}</h3>
                           <p>{platform_desc}</p>
                           <p class="file-size">{size_str}</p>
                           <a href="{download_urls[platform_key]}" class="download-btn">Download</a>
@@ -547,134 +557,185 @@ Resources:
               <head>
                   <meta charset="UTF-8">
                   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                  <title>Claude Code Distribution</title>
+                  <title>hipages Claude Code Settings Distribution</title>
+                  <link rel="icon" href="https://hipages.com.au/favicon.ico" type="image/x-icon">
+                  <link rel="preconnect" href="https://fonts.googleapis.com">
+                  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
                   <style>
+                      @font-face {{
+                          font-family: 'Homie';
+                          src: url('https://assets.hipages.com.au/fonts/homie/Homie-Bold.otf') format('opentype');
+                          font-weight: 700;
+                          font-style: normal;
+                          font-display: swap;
+                      }}
                       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
                       body {{
-                          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-                          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                          font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                          background: #202A3E;
+                          color: #202A3E;
                           min-height: 100vh;
-                          padding: 20px;
+                          padding: 24px;
                       }}
                       .container {{
                           max-width: 900px;
                           margin: 0 auto;
-                          background: white;
-                          border-radius: 16px;
-                          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                          background: #FFFFFF;
+                          border-radius: 8px;
+                          box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
                           padding: 40px;
                       }}
+                      .brand-bar {{
+                          height: 4px;
+                          background: #F2641D;
+                          border-radius: 8px 8px 0 0;
+                          margin: -40px -40px 32px -40px;
+                      }}
                       h1 {{
-                          color: #333;
+                          font-family: 'Homie', 'Roboto', sans-serif;
+                          color: #202A3E;
                           font-size: 32px;
-                          margin-bottom: 10px;
+                          font-weight: 700;
+                          margin-bottom: 12px;
                           display: flex;
                           align-items: center;
                           gap: 12px;
                       }}
-                      .welcome {{
-                          color: #666;
-                          font-size: 16px;
-                          margin-bottom: 30px;
-                          padding: 12px 20px;
-                          background: #f8f9fa;
-                          border-radius: 8px;
-                          border-left: 4px solid #667eea;
+                      .header-logo {{
+                          width: 40px;
+                          height: 40px;
+                          flex-shrink: 0;
                       }}
-                      .release-date {{
-                          color: #888;
+                      .platform-icon {{
+                          width: 24px;
+                          height: 24px;
+                          vertical-align: middle;
+                          margin-right: 4px;
+                          flex-shrink: 0;
+                      }}
+                      .welcome {{
+                          color: #202A3E;
+                          font-size: 16px;
+                          margin-bottom: 24px;
+                          padding: 12px 20px;
+                          background: #F4F4F5;
+                          border-radius: 6px;
+                          border-left: 4px solid #F2641D;
+                      }}
+                      .release-info {{
+                          display: flex;
+                          flex-wrap: wrap;
+                          gap: 16px;
+                          margin-bottom: 24px;
+                          padding: 16px;
+                          background: #F4F4F5;
+                          border-radius: 6px;
+                      }}
+                      .release-info-item {{
+                          color: #6E7481;
                           font-size: 14px;
-                          margin-bottom: 30px;
                           display: flex;
                           align-items: center;
-                          gap: 8px;
+                          gap: 6px;
+                      }}
+                      .release-info-item strong {{
+                          color: #202A3E;
                       }}
                       .platform-card {{
-                          border: 2px solid #e9ecef;
+                          border: 1px solid #E8E9EB;
                           padding: 24px;
-                          margin: 20px 0;
-                          border-radius: 12px;
-                          transition: all 0.3s ease;
-                          background: white;
+                          margin: 16px 0;
+                          border-radius: 8px;
+                          transition: border-color 0.2s ease, box-shadow 0.2s ease;
+                          background: #FFFFFF;
                       }}
                       .platform-card:hover {{
-                          border-color: #667eea;
-                          box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
-                          transform: translateY(-2px);
+                          border-color: #F2641D;
+                          box-shadow: 0 2px 8px rgba(242, 100, 29, 0.1);
                       }}
                       .platform-card.recommended {{
-                          border: 2px solid #667eea;
-                          background: linear-gradient(135deg, #f8f9ff 0%, #fff 100%);
-                          box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+                          border: 2px solid #F2641D;
+                          background: #FFFFFF;
+                          box-shadow: 0 2px 8px rgba(242, 100, 29, 0.12);
                       }}
                       .recommended-badge {{
                           display: inline-block;
-                          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                          color: white;
+                          background: #F2641D;
+                          color: #FFFFFF;
                           padding: 4px 12px;
-                          border-radius: 12px;
-                          font-size: 14px;
-                          font-weight: 600;
+                          border-radius: 4px;
+                          font-size: 12px;
+                          font-weight: 700;
                           margin-left: 8px;
+                          text-transform: uppercase;
+                          letter-spacing: 0.5px;
                       }}
                       .platform-card h3 {{
-                          color: #333;
+                          font-family: 'Homie', 'Roboto', sans-serif;
+                          color: #202A3E;
                           margin-bottom: 8px;
                           font-size: 20px;
+                          font-weight: 700;
                       }}
                       .platform-card p {{
-                          color: #666;
+                          color: #6E7481;
                           margin-bottom: 16px;
                       }}
                       .file-size {{
-                          color: #888;
+                          color: #6E7481;
                           font-size: 14px;
-                          font-weight: 600;
+                          font-weight: 500;
                       }}
                       .download-btn {{
-                          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                          color: white;
+                          background: #F2641D;
+                          color: #FFFFFF;
                           padding: 12px 32px;
                           text-decoration: none;
-                          border-radius: 8px;
+                          border-radius: 6px;
                           display: inline-block;
-                          font-weight: 600;
-                          transition: all 0.3s ease;
-                          box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+                          font-weight: 700;
+                          font-size: 14px;
+                          transition: background-color 0.2s ease;
                       }}
                       .download-btn:hover {{
-                          transform: translateY(-2px);
-                          box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+                          background: #F16E00;
                       }}
                       .instructions {{
-                          margin-top: 40px;
+                          margin-top: 32px;
                           padding: 24px;
-                          background: #f8f9fa;
-                          border-radius: 12px;
-                          border: 1px solid #e9ecef;
+                          background: #F4F4F5;
+                          border-radius: 8px;
+                          border: 1px solid #E8E9EB;
                       }}
                       .instructions h4 {{
-                          color: #333;
+                          font-family: 'Homie', 'Roboto', sans-serif;
+                          color: #202A3E;
                           margin-bottom: 16px;
                           font-size: 18px;
+                          font-weight: 700;
                       }}
                       .instructions ul {{
                           margin-left: 24px;
-                          color: #666;
+                          color: #6E7481;
                           line-height: 1.8;
                       }}
+                      .instructions li strong {{
+                          color: #202A3E;
+                      }}
                       .instructions code {{
-                          background: #e9ecef;
+                          background: #E8E9EB;
                           padding: 2px 8px;
                           border-radius: 4px;
-                          font-family: 'Courier New', monospace;
-                          color: #d63384;
+                          font-family: 'Roboto Mono', 'Courier New', monospace;
+                          color: #202A3E;
+                          font-size: 13px;
                       }}
                       .footer {{
                           margin-top: 24px;
                           padding-top: 24px;
-                          border-top: 1px solid #e9ecef;
-                          color: #888;
+                          border-top: 1px solid #E8E9EB;
+                          color: #6E7481;
                           font-size: 14px;
                           text-align: center;
                       }}
@@ -682,30 +743,33 @@ Resources:
               </head>
               <body>
                   <div class="container">
-                      <h1>📦 Claude Code Distribution</h1>
+                      <div class="brand-bar"></div>
+                      <h1><img src="https://assets.hipages.com.au/logos/bimi.svg" alt="hipages" class="header-logo">hipages Claude Code Settings Distribution</h1>
                       <div class="welcome">
                           <strong>Welcome, {user_email}</strong>
                       </div>
-                      <div class="release-date">
-                          📦 <strong>Profile:</strong> {profile}
+                      <div class="release-info">
+                          <div class="release-info-item">
+                              <strong>Profile:</strong> {profile}
+                          </div>
+                          <div class="release-info-item">
+                              <strong>Release Date:</strong> {formatted_datetime}
+                          </div>
+                          <div class="release-info-item">
+                              <strong>Build:</strong> {formatted_timestamp}
+                          </div>
                       </div>
-                      <div class="release-date">
-                          📅 <strong>Release Date:</strong> {formatted_datetime}
-                      </div>
-                      <div class="release-date">
-                          🕐 <strong>Build Timestamp:</strong> {formatted_timestamp}
-                      </div>
-
-                      {''.join(platform_cards)}
 
                       <div class="instructions">
-                          <h4>📋 Installation Instructions</h4>
+                          <h4>Installation Instructions</h4>
                           <ul>
+                              <li><strong>Mac/Linux:</strong> Extract the ZIP file and run <code>./install.sh</code></li>
                               <li><strong>Windows:</strong> Extract the ZIP file and run <code>install.bat</code></li>
-                              <li><strong>Linux/Mac:</strong> Extract the ZIP file and run <code>./install.sh</code></li>
                               <li>After installation, you can use the <code>claude</code> command from your terminal</li>
                           </ul>
                       </div>
+
+                      {''.join(platform_cards)}
                   </div>
               </body>
               </html>
@@ -817,7 +881,7 @@ Resources:
                   - !Sub 'https://${Auth0Domain}'
                   - !If
                     - IsJumpCloud
-                    - !Sub 'https://${JumpCloudDomain}'
+                    - !Sub 'https://${JumpCloudDomain}/' # trailing "/" is important as it's what needs to be matched in the issuer
                     - !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}'
             AuthorizationEndpoint: !If
               - IsOkta
