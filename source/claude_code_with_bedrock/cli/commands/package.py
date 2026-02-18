@@ -50,6 +50,8 @@ class PackageCommand(Command):
             default=None,
         ),
         option("build-verbose", description="Enable verbose logging for build processes", flag=True),
+        option("pkg-version", description="Explicit version string (e.g. 1.2.0)", flag=False, default=None),
+        option("bump", description="Bump version component (patch, minor, major)", flag=False, default=None),
     ]
 
     def handle(self) -> int:
@@ -166,6 +168,10 @@ class PackageCommand(Command):
         # Capture git SHA for version tracking in OTEL resource attributes
         git_sha = self._get_git_sha()
 
+        # Resolve package version
+        version = self._resolve_version()
+        console.print(f"[dim]Package version: {version}[/dim]")
+
         # Create timestamped output directory under profile name
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
         output_dir = Path("./dist") / profile_name / timestamp
@@ -180,7 +186,7 @@ class PackageCommand(Command):
             "region": profile.aws_region,
             "allowed_bedrock_regions": profile.allowed_bedrock_regions,
             "package_timestamp": timestamp,
-            "package_version": f"1.0.0+{git_sha}",
+            "package_version": f"{version}+{git_sha}",
             "federation_type": federation_type,
         }
 
@@ -219,7 +225,7 @@ class PackageCommand(Command):
             # Build credential process (Go cross-compilation - always local)
             console.print(f"[cyan]Building credential process for {platform_name}...[/cyan]")
             try:
-                executable_path = self._build_executable(output_dir, platform_name)
+                executable_path = self._build_executable(output_dir, platform_name, version)
                 built_executables.append((platform_name, executable_path))
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not build credential process for {platform_name}: {e}[/yellow]")
@@ -228,7 +234,7 @@ class PackageCommand(Command):
             if profile.monitoring_enabled:
                 console.print(f"[cyan]Building OTEL helper for {platform_name}...[/cyan]")
                 try:
-                    otel_helper_path = self._build_otel_helper(output_dir, platform_name)
+                    otel_helper_path = self._build_otel_helper(output_dir, platform_name, version)
                     if otel_helper_path is not None:
                         built_otel_helpers.append((platform_name, otel_helper_path))
                 except Exception as e:
@@ -256,7 +262,7 @@ class PackageCommand(Command):
 
         # Always create Claude Code settings (required for Bedrock configuration)
         console.print("[cyan]Creating Claude Code settings...[/cyan]")
-        self._create_claude_settings(output_dir, profile, include_coauthored_by, profile_name, git_sha)
+        self._create_claude_settings(output_dir, profile, include_coauthored_by, profile_name, version, git_sha)
 
         # Summary
         console.print("\n[green]✓ Package created successfully![/green]")
@@ -393,7 +399,7 @@ class PackageCommand(Command):
         "windows": ("windows", "amd64", "otel-helper-windows.exe"),
     }
 
-    def _build_executable(self, output_dir: Path, target_platform: str) -> Path:
+    def _build_executable(self, output_dir: Path, target_platform: str, version: str = "1.0.0") -> Path:
         """Build credential-process binary for target platform using Go cross-compilation.
 
         Go cross-compiles all platforms from any host with CGO_ENABLED=0,
@@ -413,9 +419,9 @@ class PackageCommand(Command):
             raise ValueError(f"Unsupported target platform: {target_platform}")
 
         goos, goarch, binary_name = self.GO_PLATFORM_MAP[target_platform]
-        return self._build_go_binary_from(output_dir, goos, goarch, binary_name, "credential-provider-go")
+        return self._build_go_binary_from(output_dir, goos, goarch, binary_name, "credential-provider-go", version)
 
-    def _build_go_binary_from(self, output_dir: Path, goos: str, goarch: str, binary_name: str, go_subdir: str) -> Path:
+    def _build_go_binary_from(self, output_dir: Path, goos: str, goarch: str, binary_name: str, go_subdir: str, version: str = "1.0.0") -> Path:
         """Cross-compile a Go binary for the given GOOS/GOARCH from the specified source subdirectory."""
         console = Console()
         verbose = self.option("build-verbose")
@@ -447,7 +453,7 @@ class PackageCommand(Command):
 
         cmd = [
             "go", "build",
-            "-ldflags", "-s -w",
+            "-ldflags", f"-s -w -X main.injectedVersion={version}",
             "-o", str((output_dir / binary_name).resolve()),
             ".",
         ]
@@ -475,7 +481,7 @@ class PackageCommand(Command):
         console.print(f"[green]✓ {binary_name} built ({size_mb:.1f} MB)[/green]")
         return binary_path
 
-    def _build_otel_helper(self, output_dir: Path, target_platform: str) -> Path:
+    def _build_otel_helper(self, output_dir: Path, target_platform: str, version: str = "1.0.0") -> Path:
         """Build OTEL helper binary for target platform using Go cross-compilation."""
         import platform as platform_module
 
@@ -491,7 +497,7 @@ class PackageCommand(Command):
             raise ValueError(f"Unsupported target platform for OTEL helper: {target_platform}")
 
         goos, goarch, binary_name = self.GO_OTEL_PLATFORM_MAP[target_platform]
-        return self._build_go_binary_from(output_dir, goos, goarch, binary_name, "otel-helper-go")
+        return self._build_go_binary_from(output_dir, goos, goarch, binary_name, "otel-helper-go", version)
 
     def _get_git_sha(self) -> str:
         """Get short git SHA of current HEAD, or 'unknown' if not in a git repo."""
@@ -505,6 +511,104 @@ class PackageCommand(Command):
         except Exception:
             pass
         return "unknown"
+
+    def _resolve_version(self) -> str:
+        """Resolve the package version with precedence: --pkg-version flag > --bump applied to VERSION > VERSION file > fallback."""
+        version_file = Path(__file__).parent.parent.parent.parent / "VERSION"
+
+        # 1. Explicit --pkg-version flag takes precedence
+        explicit_version = self.option("pkg-version")
+        if explicit_version:
+            # Write back to VERSION file so it stays in sync
+            try:
+                version_file.write_text(explicit_version.strip() + "\n")
+            except OSError:
+                pass
+            return explicit_version.strip()
+
+        # 2. Read current version from VERSION file
+        current_version = "1.0.0"
+        if version_file.exists():
+            current_version = version_file.read_text().strip()
+
+        # 3. Apply --bump if specified
+        bump = self.option("bump")
+        if bump:
+            new_version = self._bump_version(current_version, bump)
+            # Write bumped version back to VERSION file
+            try:
+                version_file.write_text(new_version + "\n")
+            except OSError:
+                pass
+            return new_version
+
+        # 4. Interactive prompt — show current version and let user choose
+        patch_version = self._bump_version(current_version, "patch")
+        minor_version = self._bump_version(current_version, "minor")
+        major_version = self._bump_version(current_version, "major")
+
+        version_choice = questionary.select(
+            f"Package version (current: {current_version})?",
+            choices=[
+                f"Keep {current_version}",
+                f"Bump patch → {patch_version}",
+                f"Bump minor → {minor_version}",
+                f"Bump major → {major_version}",
+                "Enter custom version",
+            ],
+        ).ask()
+
+        if version_choice is None:
+            # User cancelled
+            return current_version
+
+        if version_choice.startswith("Keep"):
+            return current_version
+        elif version_choice.startswith("Bump patch"):
+            chosen = patch_version
+        elif version_choice.startswith("Bump minor"):
+            chosen = minor_version
+        elif version_choice.startswith("Bump major"):
+            chosen = major_version
+        else:
+            chosen = questionary.text(
+                "Enter version (e.g. 1.2.0):",
+                validate=lambda v: len(v.split(".")) == 3 or "Must be semver (e.g. 1.2.0)",
+            ).ask()
+            if not chosen:
+                return current_version
+
+        # Write chosen version back to VERSION file
+        try:
+            version_file.write_text(chosen.strip() + "\n")
+        except OSError:
+            pass
+        return chosen.strip()
+
+    @staticmethod
+    def _bump_version(version: str, component: str) -> str:
+        """Bump a semver version string by the given component (patch, minor, major)."""
+        # Strip any build metadata or pre-release suffix
+        base = version.split("+")[0].split("-")[0]
+        parts = base.split(".")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid semver version: {version}")
+
+        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+
+        if component == "major":
+            major += 1
+            minor = 0
+            patch = 0
+        elif component == "minor":
+            minor += 1
+            patch = 0
+        elif component == "patch":
+            patch += 1
+        else:
+            raise ValueError(f"Invalid bump component: {component}. Use 'patch', 'minor', or 'major'.")
+
+        return f"{major}.{minor}.{patch}"
 
     def _create_config(
         self,
@@ -550,6 +654,23 @@ class PackageCommand(Command):
         # Add selected_model if available
         if hasattr(profile, "selected_model") and profile.selected_model:
             config[profile_name]["selected_model"] = profile.selected_model
+
+        # Add auto-update fields if distribution is enabled and admin opted in
+        if profile.enable_distribution and profile.auto_update_enabled:
+            try:
+                dist_stack_name = profile.stack_names.get(
+                    "distribution", f"{profile.identity_pool_name}-distribution"
+                )
+                dist_outputs = get_stack_outputs(dist_stack_name, profile.aws_region)
+                dist_bucket = dist_outputs.get("DistributionBucket") if dist_outputs else None
+                if dist_bucket:
+                    config[profile_name]["update_bucket"] = dist_bucket
+                    config[profile_name]["update_region"] = profile.aws_region
+                    config[profile_name]["update_prefix"] = "packages"
+                    config[profile_name]["auto_update_enabled"] = True
+                    config[profile_name]["auto_update_interval_hours"] = profile.auto_update_interval_hours
+            except Exception:
+                pass  # Silently skip if distribution stack not available
 
         config_path = output_dir / "config.json"
         with open(config_path, "w") as f:
@@ -1135,7 +1256,7 @@ Available metrics include:
 
     def _create_claude_settings(
         self, output_dir: Path, profile, include_coauthored_by: bool = True, profile_name: str = "ClaudeCode",
-        git_sha: str = "unknown",
+        version: str = "1.0.0", git_sha: str = "unknown",
     ):
         """Create Claude Code settings.json with Bedrock and optional monitoring configuration."""
         console = Console()
@@ -1223,7 +1344,7 @@ Available metrics include:
                                 # per-user department from the JWT token via the x-department header
                                 "OTEL_RESOURCE_ATTRIBUTES": f"team.id=default,"
                                 f"cost_center=default,organization=default,"
-                                f"ccwb.version={git_sha}",
+                                f"ccwb.version={version}+{git_sha}",
                             }
                         )
 

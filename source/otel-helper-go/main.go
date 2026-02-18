@@ -9,6 +9,18 @@ import (
 	"strings"
 )
 
+// injectedVersion is set at build time via -ldflags "-X main.injectedVersion=X.Y.Z"
+var injectedVersion string
+
+const defaultVersion = "1.0.0"
+
+func getVersion() string {
+	if injectedVersion != "" {
+		return injectedVersion
+	}
+	return defaultVersion
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -16,7 +28,13 @@ func main() {
 func run() int {
 	testFlag := flag.Bool("test", false, "Run in test mode with verbose output")
 	verboseFlag := flag.Bool("verbose", false, "Show verbose output")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("otel-helper-go %s\n", getVersion())
+		return 0
+	}
 
 	initDebug()
 	defer closeDebug()

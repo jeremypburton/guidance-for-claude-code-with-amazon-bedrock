@@ -437,6 +437,23 @@ class DeployCommand(Command):
                     ]
                 )
 
+                # Pass distribution bucket ARN for auto-update S3 permissions
+                if profile.auto_update_enabled and profile.enable_distribution:
+                    try:
+                        dist_stack_name = profile.stack_names.get(
+                            "distribution", f"{profile.identity_pool_name}-distribution"
+                        )
+                        dist_outputs = get_stack_outputs(dist_stack_name, profile.aws_region)
+                        dist_bucket_arn = dist_outputs.get("DistributionBucketArn", "") if dist_outputs else ""
+                        if dist_bucket_arn:
+                            params.append(f"DistributionBucketArn={dist_bucket_arn}")
+                    except Exception:
+                        console.print(
+                            "[dim]Note: Distribution stack not yet deployed. "
+                            "Re-run 'ccwb deploy auth' after deploying distribution "
+                            "to enable auto-update S3 permissions.[/dim]"
+                        )
+
                 return deploy_with_cf(
                     template,
                     stack_name,

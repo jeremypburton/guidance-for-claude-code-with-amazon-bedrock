@@ -1,6 +1,7 @@
-MODULE   := otel-helper-go
-VERSION  := 1.0.0
-LDFLAGS  := -s -w
+MODULE       := otel-helper-go
+VERSION_FILE := ../VERSION
+VERSION      := $(shell if [ -f $(VERSION_FILE) ]; then cat $(VERSION_FILE); else echo dev; fi)
+LDFLAGS      := -s -w -X main.injectedVersion=$(VERSION)
 DIST     := dist
 
 .PHONY: build build-all test test-coverage lint vet clean size-report

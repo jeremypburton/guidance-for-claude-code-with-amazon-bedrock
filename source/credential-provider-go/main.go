@@ -16,11 +16,22 @@ import (
 	"credential-provider-go/monitoring"
 	"credential-provider-go/provider"
 	"credential-provider-go/quota"
+	"credential-provider-go/update"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const version = "1.0.0"
+// injectedVersion is set at build time via -ldflags "-X main.injectedVersion=X.Y.Z"
+var injectedVersion string
+
+const defaultVersion = "1.0.0"
+
+func getVersion() string {
+	if injectedVersion != "" {
+		return injectedVersion
+	}
+	return defaultVersion
+}
 
 func main() {
 	os.Exit(run())
@@ -36,13 +47,28 @@ func run() int {
 	clearCache := flag.Bool("clear-cache", false, "Clear cached credentials")
 	checkExpiration := flag.Bool("check-expiration", false, "Check if credentials need refresh")
 	refreshIfNeeded := flag.Bool("refresh-if-needed", false, "Refresh credentials if expired")
+	selfUpdate := flag.Bool("self-update", false, "Run self-update (internal use)")
+	updateVersion := flag.String("update-version", "", "Target version for self-update")
 	flag.Parse()
+
+	// Handle --self-update early, before config loading
+	if *selfUpdate {
+		internal.InitDebug()
+		defer internal.CloseDebug()
+		return update.RunSelfUpdate(*updateVersion)
+	}
 
 	internal.InitDebug()
 	defer internal.CloseDebug()
 
+	// Clean up .old/.backup files from previous updates
+	update.CleanupOldBinaries()
+
+	// Show pending update notification
+	update.NotifyIfPending()
+
 	if *versionFlag {
-		fmt.Printf("credential-provider-go %s\n", version)
+		fmt.Printf("credential-provider-go %s\n", getVersion())
 		return 0
 	}
 
@@ -192,6 +218,7 @@ func runCredentialFlow(cfg *config.ProfileConfig, profile, providerType string, 
 		}
 
 		printJSON(cached)
+		update.TryCheckAndSpawn(cfg, getVersion(), credentialMap(cached))
 		return 0
 	}
 
@@ -285,7 +312,21 @@ func handleNewTokens(cfg *config.ProfileConfig, profile string, result *auth.OAu
 
 	// Output credentials to stdout
 	printJSON(creds)
+	update.TryCheckAndSpawn(cfg, getVersion(), credentialMap(creds))
 	return 0
+}
+
+// credentialMap converts an AWSCredentialOutput to a map for the update package.
+func credentialMap(creds *credentials.AWSCredentialOutput) map[string]interface{} {
+	if creds == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"AccessKeyId":     creds.AccessKeyID,
+		"SecretAccessKey": creds.SecretAccessKey,
+		"SessionToken":    creds.SessionToken,
+		"Expiration":      creds.Expiration,
+	}
 }
 
 func authenticateForMonitoring(cfg *config.ProfileConfig, profile, providerType string, providerCfg provider.Config) (string, int) {

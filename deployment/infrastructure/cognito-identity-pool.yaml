@@ -79,11 +79,17 @@ Parameters:
       - 'false'
     Description: Enable CloudTrail tracking of Bedrock API calls for monitoring and cost analysis
 
+  DistributionBucketArn:
+    Type: String
+    Default: ''
+    Description: ARN of the distribution S3 bucket for auto-update (empty to disable)
+
 Conditions:
   UseExternalOIDC: !Equals [!Ref AuthProviderType, 'ExternalOIDC']
   UseCognitoUserPool: !Equals [!Ref AuthProviderType, 'CognitoUserPool']
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
   BedrockTrackingEnabled: !Equals [!Ref EnableBedrockTracking, 'true']
+  AutoUpdateEnabled: !Not [!Equals [!Ref DistributionBucketArn, '']]
   # Partition-aware conditions for Cognito Identity service principals
   IsGovCloudWest: !Equals [!Ref 'AWS::Region', 'us-gov-west-1']
   IsGovCloudEast: !Equals [!Ref 'AWS::Region', 'us-gov-east-1']
@@ -168,6 +174,28 @@ Resources:
                     - 'ClaudeCode'
                     - 'AWS/Bedrock'
                   'aws:RequestedRegion': !Ref AllowedBedrockRegions
+            - !Ref 'AWS::NoValue'
+          - !If
+            - AutoUpdateEnabled
+            - Sid: AllowDistributionBucketRead
+              Effect: Allow
+              Action:
+                - 's3:GetObject'
+              Resource:
+                - !Sub '${DistributionBucketArn}/packages/*'
+            - !Ref 'AWS::NoValue'
+          - !If
+            - AutoUpdateEnabled
+            - Sid: AllowDistributionBucketList
+              Effect: Allow
+              Action:
+                - 's3:ListBucket'
+              Resource:
+                - !Ref DistributionBucketArn
+              Condition:
+                StringLike:
+                  's3:prefix':
+                    - 'packages/*'
             - !Ref 'AWS::NoValue'
 
   # IAM Role for Bedrock Access

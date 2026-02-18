@@ -291,6 +291,9 @@ class InitCommand(Command):
             skip_monitoring = last_step in ["monitoring_complete", "bedrock_complete"]
             skip_bedrock = last_step in ["bedrock_complete"]
 
+        # Pre-load region from saved config so it's available even if the AWS step is skipped
+        region = config.get("aws", {}).get("region", get_current_region())
+
         # OIDC Provider Configuration
         if not skip_okta:
             console.print("\n[bold blue]Step 1: OIDC Provider Configuration[/bold blue]")
@@ -799,7 +802,38 @@ class InitCommand(Command):
         config["distribution"]["enabled"] = distribution_type is not None
         config["distribution"]["type"] = distribution_type
 
+        # Auto-update configuration (only when distribution is enabled)
+        if distribution_type is not None:
+            saved_auto_update = config.get("distribution", {}).get("auto_update_enabled", True)
+            auto_update_enabled = questionary.confirm(
+                "Enable auto-update for distributed packages?",
+                default=saved_auto_update,
+            ).ask()
+            config["distribution"]["auto_update_enabled"] = auto_update_enabled
+
+            if auto_update_enabled:
+                saved_interval = config.get("distribution", {}).get("auto_update_interval_hours", 24)
+                interval_choices = [
+                    questionary.Choice("Every 6 hours", value=6),
+                    questionary.Choice("Every 12 hours", value=12),
+                    questionary.Choice("Every 24 hours (recommended)", value=24),
+                    questionary.Choice("Every 48 hours", value=48),
+                    questionary.Choice("Every 72 hours", value=72),
+                ]
+                auto_update_interval = questionary.select(
+                    "How often should clients check for updates?",
+                    choices=interval_choices,
+                    default=saved_interval,
+                ).ask()
+                config["distribution"]["auto_update_interval_hours"] = auto_update_interval
+            else:
+                config["distribution"]["auto_update_interval_hours"] = 24
+        else:
+            config["distribution"]["auto_update_enabled"] = False
+            config["distribution"]["auto_update_interval_hours"] = 24
+
         # If landing-page selected, prompt for additional configuration
+
         if distribution_type == "landing-page":
             console.print("\n[bold]Landing Page Configuration[/bold]")
             console.print("Configure IdP authentication for the distribution landing page")
@@ -1326,6 +1360,9 @@ class InitCommand(Command):
                 console.print("• Presigned S3 URL distribution")
                 console.print("• IAM user for presigned URL generation")
                 console.print("• Secrets Manager secret for credentials")
+            if config.get("distribution", {}).get("auto_update_enabled", False):
+                interval = config.get("distribution", {}).get("auto_update_interval_hours", 24)
+                console.print(f"• Auto-update enabled (check interval: {interval}h)")
 
         return True
 
@@ -1481,6 +1518,8 @@ class InitCommand(Command):
             distribution_idp_client_secret_arn=config_data.get("distribution", {}).get("idp_client_secret_arn"),
             distribution_custom_domain=config_data.get("distribution", {}).get("custom_domain"),
             distribution_hosted_zone_id=config_data.get("distribution", {}).get("hosted_zone_id"),
+            auto_update_enabled=config_data.get("distribution", {}).get("auto_update_enabled", False),
+            auto_update_interval_hours=config_data.get("distribution", {}).get("auto_update_interval_hours", 24),
             quota_monitoring_enabled=(
                 config_data.get("quota", {}).get("enabled", False)
                 if config_data.get("monitoring", {}).get("enabled")

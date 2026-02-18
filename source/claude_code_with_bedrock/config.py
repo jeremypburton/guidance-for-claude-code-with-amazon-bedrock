@@ -49,6 +49,10 @@ class Profile:
     distribution_custom_domain: str | None = None  # Optional custom domain (e.g., "downloads.company.com")
     distribution_hosted_zone_id: str | None = None  # Optional Route53 hosted zone ID
 
+    # Auto-update configuration (requires distribution to be enabled)
+    auto_update_enabled: bool = False  # Whether distributed packages auto-update
+    auto_update_interval_hours: int = 24  # Hours between update checks
+
     # Quota monitoring configuration
     quota_monitoring_enabled: bool = False  # Enable per-user token quota monitoring
     monthly_token_limit: int = 225000000  # Monthly token limit per user (225M default)

@@ -49,10 +49,16 @@ Parameters:
       - 'false'
     Description: Enable CloudWatch monitoring for Bedrock usage
 
+  DistributionBucketArn:
+    Type: String
+    Default: ''
+    Description: ARN of the distribution S3 bucket for auto-update (empty to disable)
+
 Conditions:
   UseDirectIAM: !Equals [!Ref FederationType, direct]
   UseCognitoIdentity: !Equals [!Ref FederationType, cognito]
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
+  AutoUpdateEnabled: !Not [!Equals [!Ref DistributionBucketArn, '']]
   # Partition-aware conditions for Cognito Identity service principals
   IsGovCloudWest: !Equals [!Ref 'AWS::Region', 'us-gov-west-1']
   IsGovCloudEast: !Equals [!Ref 'AWS::Region', 'us-gov-east-1']
@@ -147,6 +153,28 @@ Resources:
                   'cloudwatch:namespace':
                     - 'ClaudeCode/Bedrock/Usage'
                     - 'AWS/Bedrock'
+            - !Ref 'AWS::NoValue'
+          - !If
+            - AutoUpdateEnabled
+            - Sid: AllowDistributionBucketRead
+              Effect: Allow
+              Action:
+                - 's3:GetObject'
+              Resource:
+                - !Sub '${DistributionBucketArn}/packages/*'
+            - !Ref 'AWS::NoValue'
+          - !If
+            - AutoUpdateEnabled
+            - Sid: AllowDistributionBucketList
+              Effect: Allow
+              Action:
+                - 's3:ListBucket'
+              Resource:
+                - !Ref DistributionBucketArn
+              Condition:
+                StringLike:
+                  's3:prefix':
+                    - 'packages/*'
             - !Ref 'AWS::NoValue'
 
   # ===============================================

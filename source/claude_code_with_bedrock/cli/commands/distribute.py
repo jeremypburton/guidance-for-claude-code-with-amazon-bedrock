@@ -8,7 +8,7 @@ import json
 import shutil
 import tempfile
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import boto3
@@ -631,6 +631,67 @@ class DistributeCommand(Command):
                 except ClientError as e:
                     console.print(f"[red]Failed to upload {platform} package: {e}[/red]")
                     continue
+
+        # Upload latest.json manifest AFTER all platform zips are uploaded
+        # This ensures clients never see a version that doesn't have all binaries available
+        if uploaded_count > 0:
+            try:
+                # Read version from source/VERSION
+                version_file = Path(__file__).parent.parent.parent.parent / "VERSION"
+                if version_file.exists():
+                    manifest_version = version_file.read_text().strip()
+                else:
+                    manifest_version = "1.0.0"
+
+                # Build manifest with per-architecture keys
+                # Map from landing-page platform names to architecture-specific keys
+                arch_platform_map = {
+                    "macos-arm64": ("packages/mac/latest.zip", "credential-process-macos-arm64"),
+                    "macos-intel": ("packages/mac/latest.zip", "credential-process-macos-intel"),
+                    "linux-x64": ("packages/linux/latest.zip", "credential-process-linux-x64"),
+                    "linux-arm64": ("packages/linux/latest.zip", "credential-process-linux-arm64"),
+                    "windows": ("packages/windows/latest.zip", "credential-process-windows.exe"),
+                }
+
+                binaries = {}
+                for arch_key, (s3_key, binary_file) in arch_platform_map.items():
+                    # Find the zip file for this architecture's platform
+                    # Map architecture to platform group
+                    if arch_key.startswith("macos"):
+                        platform_group = "mac"
+                    elif arch_key.startswith("linux"):
+                        platform_group = "linux"
+                    else:
+                        platform_group = "windows"
+
+                    zip_path = temp_dir / f"{platform_group}.zip"
+                    if zip_path.exists():
+                        file_size = zip_path.stat().st_size
+                        file_checksum = self._calculate_checksum(zip_path)
+                        binaries[arch_key] = {
+                            "s3_key": s3_key,
+                            "sha256": file_checksum,
+                            "size_bytes": file_size,
+                        }
+
+                manifest = {
+                    "version": manifest_version,
+                    "released_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "binaries": binaries,
+                }
+
+                manifest_json = json.dumps(manifest, indent=2)
+                s3.put_object(
+                    Bucket=bucket_name,
+                    Key="packages/latest.json",
+                    Body=manifest_json.encode("utf-8"),
+                    ContentType="application/json",
+                )
+                console.print(f"[green]✓ Uploaded latest.json manifest (version {manifest_version})[/green]")
+                console.print(f"  [dim]S3: s3://{bucket_name}/packages/latest.json[/dim]")
+                console.print(f"  [dim]Platforms: {', '.join(binaries.keys())}[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Failed to upload latest.json manifest: {e}[/yellow]")
 
         # Clean up temp directory
         shutil.rmtree(temp_dir)

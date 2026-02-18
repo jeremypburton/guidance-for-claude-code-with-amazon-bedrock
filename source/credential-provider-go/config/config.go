@@ -34,6 +34,13 @@ type ProfileConfig struct {
 	CrossRegionProfile string `json:"cross_region_profile"`
 	SelectedModel      string `json:"selected_model"`
 
+	// Auto-update fields
+	UpdateBucket          string `json:"update_bucket"`
+	UpdateRegion          string `json:"update_region"`
+	UpdatePrefix          string `json:"update_prefix"`
+	AutoUpdateEnabled     bool   `json:"auto_update_enabled"`
+	AutoUpdateIntervalHrs int    `json:"auto_update_interval_hours"`
+
 	// Compatibility fields (old format)
 	OktaDomain   string `json:"okta_domain"`
 	OktaClientID string `json:"okta_client_id"`
@@ -165,6 +172,18 @@ func parseConfigData(data []byte, profile string) (*ProfileConfig, error) {
 	}
 	if cfg.QuotaCheckTimeout == 0 {
 		cfg.QuotaCheckTimeout = 5
+	}
+
+	// Auto-update defaults
+	if cfg.AutoUpdateIntervalHrs == 0 {
+		cfg.AutoUpdateIntervalHrs = 24
+	}
+	if cfg.UpdateRegion == "" {
+		cfg.UpdateRegion = cfg.AWSRegion
+	}
+	if cfg.AutoUpdateEnabled && cfg.UpdateBucket == "" {
+		internal.DebugPrint("auto_update_enabled is true but update_bucket is empty, disabling auto-update")
+		cfg.AutoUpdateEnabled = false
 	}
 
 	return &cfg, nil
