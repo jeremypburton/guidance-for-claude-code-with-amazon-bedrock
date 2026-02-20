@@ -37,11 +37,15 @@ func AssumeRoleWithWebIdentity(cfg *config.ProfileConfig, idToken string, claims
 	internal.DebugPrint("Assuming role: %s", cfg.FederatedRoleARN)
 	internal.DebugPrint("Session name: %s", sessionName)
 
-	// Create STS client with no credentials (AssumeRoleWithWebIdentity doesn't need them)
+	// Create STS client with no credentials (AssumeRoleWithWebIdentity doesn't need them).
+	// Skip shared config/credentials files to avoid "partial credentials" errors when
+	// ~/.aws/credentials contains expired placeholder values for any profile.
 	ctx := context.Background()
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(cfg.AWSRegion),
 		awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}),
+		awsconfig.WithSharedCredentialsFiles([]string{}),
+		awsconfig.WithSharedConfigFiles([]string{}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AWS config: %w", err)

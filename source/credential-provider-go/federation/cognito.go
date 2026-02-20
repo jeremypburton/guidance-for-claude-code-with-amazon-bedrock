@@ -26,10 +26,14 @@ func GetCognitoCredentials(cfg *config.ProfileConfig, idToken string, claims jwt
 
 	ctx := context.Background()
 
-	// Create Cognito Identity client with anonymous credentials (no AWS creds needed)
+	// Create Cognito Identity client with anonymous credentials (no AWS creds needed).
+	// Skip shared config/credentials files to avoid "partial credentials" errors when
+	// ~/.aws/credentials contains expired placeholder values for any profile.
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(cfg.AWSRegion),
 		awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}),
+		awsconfig.WithSharedCredentialsFiles([]string{}),
+		awsconfig.WithSharedConfigFiles([]string{}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AWS config: %w", err)

@@ -39,13 +39,16 @@ type binaryDetails struct {
 }
 
 // newS3Client creates an S3 client using static credentials to avoid
-// recursive credential_process invocation.
+// recursive credential_process invocation. Shared config/credentials files are
+// skipped to prevent "partial credentials" errors from expired placeholder values.
 func newS3Client(region, accessKeyID, secretKey, sessionToken string) (*s3.Client, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(accessKeyID, secretKey, sessionToken),
 		),
+		awsconfig.WithSharedCredentialsFiles([]string{}),
+		awsconfig.WithSharedConfigFiles([]string{}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AWS config: %w", err)
