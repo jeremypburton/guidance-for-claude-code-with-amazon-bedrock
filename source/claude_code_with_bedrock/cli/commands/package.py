@@ -165,12 +165,13 @@ class PackageCommand(Command):
             )
         )
 
-        # Capture git SHA for version tracking in OTEL resource attributes
-        git_sha = self._get_git_sha()
-
-        # Resolve package version
+        # Resolve package version (may update VERSION file)
         version = self._resolve_version()
-        console.print(f"[dim]Package version: {version}[/dim]")
+        self._commit_version_if_changed(version)
+
+        # Capture git SHA after any VERSION commit so the SHA matches the source
+        git_sha = self._get_git_sha()
+        console.print(f"[dim]Package version: {version}+{git_sha}[/dim]")
 
         # Create timestamped output directory under profile name
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -511,6 +512,29 @@ class PackageCommand(Command):
         except Exception:
             pass
         return "unknown"
+
+    def _commit_version_if_changed(self, version: str) -> None:
+        """Commit the VERSION file if it has uncommitted changes, so the git SHA reflects the bump."""
+        try:
+            version_file = Path(__file__).parent.parent.parent.parent / "VERSION"
+            # Check if VERSION has uncommitted changes
+            result = subprocess.run(
+                ["git", "diff", "--name-only", str(version_file)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return
+
+            subprocess.run(
+                ["git", "add", str(version_file)],
+                capture_output=True, text=True, timeout=5,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", f"Bump version to {version}"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception:
+            pass
 
     def _resolve_version(self) -> str:
         """Resolve the package version with precedence: --pkg-version flag > --bump applied to VERSION > VERSION file > fallback."""
