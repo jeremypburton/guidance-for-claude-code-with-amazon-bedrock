@@ -44,12 +44,16 @@ func replaceBinary(srcPath, destPath string) error {
 		return fmt.Errorf("failed to rename binary: %w", err)
 	}
 
-	// macOS: remove quarantine attribute
+	// macOS: remove quarantine attribute and ad-hoc codesign (required on Apple Silicon)
 	if runtime.GOOS == "darwin" {
 		cmd := exec.Command("xattr", "-d", "com.apple.quarantine", destPath)
 		if err := cmd.Run(); err != nil {
 			// Ignore errors — attribute may not exist
 			internal.DebugPrint("xattr quarantine removal: %v (ignored)", err)
+		}
+		cmd = exec.Command("codesign", "-s", "-", "-f", destPath)
+		if err := cmd.Run(); err != nil {
+			internal.DebugPrint("ad-hoc codesign: %v (ignored)", err)
 		}
 	}
 

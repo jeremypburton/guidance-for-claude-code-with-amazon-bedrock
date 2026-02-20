@@ -258,7 +258,7 @@ class PackageCommand(Command):
 
         # Create documentation
         console.print("[cyan]Creating documentation...[/cyan]")
-        self._create_documentation(output_dir, profile, timestamp)
+        self._create_documentation(output_dir, profile, timestamp, profile_name)
 
         # Always create Claude Code settings (required for Bedrock configuration)
         console.print("[cyan]Creating Claude Code settings...[/cyan]")
@@ -739,17 +739,6 @@ echo "Organization: {profile.provider_domain}"
 echo
 
 
-# Check prerequisites
-echo "Checking prerequisites..."
-
-if ! command -v aws &> /dev/null; then
-    echo "❌ AWS CLI is not installed"
-    echo "   Please install from https://aws.amazon.com/cli/"
-    exit 1
-fi
-
-echo "✓ Prerequisites found"
-
 # Detect platform and architecture
 echo
 echo "Detecting platform and architecture..."
@@ -803,8 +792,11 @@ cp "$CREDENTIAL_BINARY" ~/claude-code-with-bedrock/credential-process
 cp config.json ~/claude-code-with-bedrock/
 chmod +x ~/claude-code-with-bedrock/credential-process
 
-# macOS Keychain Notice
+# macOS: ad-hoc codesign binaries (required on Apple Silicon, harmless on Intel)
 if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "Signing credential-process for macOS..."
+    codesign -s - -f ~/claude-code-with-bedrock/credential-process 2>/dev/null || true
+
     echo
     echo "⚠️  macOS Keychain Access:"
     echo "   On first use, macOS will ask for permission to access the keychain."
@@ -851,6 +843,9 @@ if [ -f "$OTEL_BINARY" ]; then
     echo "Installing OTEL helper..."
     cp "$OTEL_BINARY" ~/claude-code-with-bedrock/otel-helper
     chmod +x ~/claude-code-with-bedrock/otel-helper
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        codesign -s - -f ~/claude-code-with-bedrock/otel-helper 2>/dev/null || true
+    fi
     echo "✓ OTEL helper installed"
 fi
 
@@ -915,16 +910,11 @@ for PROFILE_NAME in $PROFILES; do
     echo "  - $PROFILE_NAME"
 done
 echo
-echo "To use Claude Code authentication:"
-echo "  export AWS_PROFILE=<profile-name>"
-echo "  aws sts get-caller-identity"
-echo
-echo "Example:"
+echo "To verify authentication, run:"
 FIRST_PROFILE=$(echo $PROFILES | awk '{{print $1}}')
-echo "  export AWS_PROFILE=$FIRST_PROFILE"
-echo "  aws sts get-caller-identity"
+echo "  ~/claude-code-with-bedrock/credential-process --profile $FIRST_PROFILE"
 echo
-echo "Note: Authentication will automatically open your browser when needed."
+echo "This will open your browser for authentication and print credentials on success."
 echo
 """
 
@@ -952,20 +942,6 @@ echo Claude Code Authentication Installer
 echo ======================================
 echo.
 echo Organization: {profile.provider_domain}
-echo.
-
-REM Check prerequisites
-echo Checking prerequisites...
-
-where aws >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: AWS CLI is not installed
-    echo        Please install from https://aws.amazon.com/cli/
-    pause
-    exit /b 1
-)
-
-echo OK Prerequisites found
 echo.
 
 REM Create directory
@@ -1027,31 +1003,20 @@ if exist "claude-settings" (
 REM Configure AWS profiles
 echo.
 echo Configuring AWS profiles...
+if not exist "%USERPROFILE%\\.aws" mkdir "%USERPROFILE%\\.aws"
 
-REM Read profiles from config.json using PowerShell
-for /f %%p in ('powershell -Command ^
-"& {{$c=Get-Content config.json|ConvertFrom-Json;$c.PSObject.Properties.Name}}"') do (
-    echo Configuring AWS profile: %%p
-
-    REM Get profile-specific region
-    for /f %%r in ('powershell -Command ^
-    "& {{$c=Get-Content config.json|ConvertFrom-Json;$c.'%%p'.aws_region}}"') do set PROFILE_REGION=%%r
-
-
-    REM Set credential process with --profile flag (cross-platform, no wrapper needed)
-    aws configure set credential_process ^
-    "%USERPROFILE%\\claude-code-with-bedrock\\credential-process.exe --profile %%p" --profile %%p
-
-
-    REM Set region
-    if defined PROFILE_REGION (
-        aws configure set region !PROFILE_REGION! --profile %%p
-    ) else (
-        aws configure set region {profile.aws_region} --profile %%p
-    )
-
-    echo   OK Created AWS profile '%%p'
-)
+REM Write profiles directly to AWS config file (no AWS CLI dependency)
+powershell -Command ^
+"$config = Get-Content config.json | ConvertFrom-Json; ^
+$awsConfigPath = Join-Path $env:USERPROFILE '.aws\\config'; ^
+foreach ($p in $config.PSObject.Properties.Name) {{ ^
+    $region = $config.$p.aws_region; ^
+    if (-not $region) {{ $region = '{profile.aws_region}' }}; ^
+    $credProcess = Join-Path $env:USERPROFILE 'claude-code-with-bedrock\\credential-process.exe'; ^
+    $block = \\\"`n[profile $p]`ncredential_process = $credProcess --profile $p`nregion = $region`n\\\"; ^
+    Add-Content -Path $awsConfigPath -Value $block; ^
+    Write-Host \\\"  OK Created AWS profile '$p'\\\" ^
+}}"
 
 echo.
 echo ======================================
@@ -1064,18 +1029,13 @@ for /f %%p in ('powershell -Command ^
     echo   - %%p
 )
 echo.
-echo To use Claude Code authentication:
-echo   set AWS_PROFILE=^<profile-name^>
-echo   aws sts get-caller-identity
-echo.
-echo Example:
+echo To verify authentication, run:
 for /f %%p in ('powershell -Command ^
 "$config = Get-Content config.json | ConvertFrom-Json; $config.PSObject.Properties.Name | Select-Object -First 1"') do (
-    echo   set AWS_PROFILE=%%p
-    echo   aws sts get-caller-identity
+    echo   %USERPROFILE%\\claude-code-with-bedrock\\credential-process.exe --profile %%p
 )
 echo.
-echo Note: Authentication will automatically open your browser when needed.
+echo This will open your browser for authentication and print credentials on success.
 echo.
 pause
 """
@@ -1087,7 +1047,7 @@ pause
         # Note: chmod not needed on Windows batch files
         return installer_path
 
-    def _create_documentation(self, output_dir: Path, profile, timestamp: str):
+    def _create_documentation(self, output_dir: Path, profile, timestamp: str, profile_name: str = "ClaudeCode"):
         """Create user documentation."""
         readme_content = f"""# Claude Code Authentication Setup
 
@@ -1106,10 +1066,9 @@ pause
    ./install.sh
    ```
 
-3. Use the AWS profile:
+3. Verify authentication works:
    ```bash
-   export AWS_PROFILE=ClaudeCode
-   aws sts get-caller-identity
+   ~/claude-code-with-bedrock/credential-process --profile {profile_name}
    ```
 
 ### Windows
@@ -1154,39 +1113,29 @@ install.bat
 ```
 
 The installer will:
-- Check for AWS CLI installation
 - Copy authentication tools to `%USERPROFILE%\\claude-code-with-bedrock`
 - Configure the AWS profile "ClaudeCode"
-- Test the authentication
 
-#### Step 4: Use Claude Code
+#### Step 4: Verify Authentication
 ```cmd
-# Set the AWS profile
-set AWS_PROFILE=ClaudeCode
-
-# Verify authentication works
-aws sts get-caller-identity
-
-# Your browser will open automatically for authentication if needed
+REM Verify authentication works (opens browser on first use)
+%USERPROFILE%\\claude-code-with-bedrock\\credential-process.exe --profile {profile_name}
 ```
 
 For PowerShell users:
 ```powershell
-$env:AWS_PROFILE = "ClaudeCode"
-aws sts get-caller-identity
+& "$env:USERPROFILE\\claude-code-with-bedrock\\credential-process.exe" --profile {profile_name}
 ```
 
 ## What This Does
 
 - Installs the Claude Code authentication tools
-- Configures your AWS CLI to use {profile.provider_domain} for authentication
+- Configures AWS profiles for {profile.provider_domain} authentication
 - Sets up automatic credential refresh via your browser
 
 ## Requirements
 
 - Python 3.8 or later
-- AWS CLI v2
-- pip3
 
 ## Troubleshooting
 
