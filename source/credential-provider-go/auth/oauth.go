@@ -262,13 +262,21 @@ func OpenBrowser(url string) error {
 	return browser.OpenURL(url)
 }
 
+// Version is set by the caller to display on the landing page.
+var Version string
+
 func htmlPage(title, body string) string {
+	versionLine := ""
+	if Version != "" {
+		versionLine = fmt.Sprintf(`<p style="color: #888; font-size: 0.8em;">v%s</p>`, Version)
+	}
 	return fmt.Sprintf(`<html>
 <head><title>Authentication</title></head>
 <body style="font-family: sans-serif; text-align: center; padding: 50px;">
     <h1>%s</h1>
     <p>%s</p>
     <p>Return to your terminal to continue.</p>
+    %s
 </body>
-</html>`, title, body)
+</html>`, title, body, versionLine)
 }

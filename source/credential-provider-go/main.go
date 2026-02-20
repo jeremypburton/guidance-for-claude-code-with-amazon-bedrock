@@ -61,6 +61,9 @@ func run() int {
 	internal.InitDebug()
 	defer internal.CloseDebug()
 
+	// Make version available to the auth landing page
+	auth.Version = getVersion()
+
 	// Clean up .old/.backup files from previous updates
 	update.CleanupOldBinaries()
 

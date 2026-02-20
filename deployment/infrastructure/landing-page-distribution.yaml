@@ -302,9 +302,10 @@ Resources:
                   profile = metadata_source.get('profile', 'Unknown')
                   timestamp = metadata_source.get('timestamp', 'Unknown')
                   release_datetime = metadata_source.get('release_datetime', 'Unknown')
+                  version = metadata_source.get('version', '')
 
                   # Generate HTML page with OS detection
-                  html = generate_landing_page(user_email, download_urls, profile, timestamp, release_datetime, packages, detected_os)
+                  html = generate_landing_page(user_email, download_urls, profile, timestamp, release_datetime, packages, detected_os, version)
 
                   return {
                       'statusCode': 200,
@@ -389,6 +390,7 @@ Resources:
                           'timestamp': metadata.get('timestamp', 'Unknown'),
                           'release_date': metadata.get('release_date', metadata.get('release-date', 'Unknown')),
                           'release_datetime': metadata.get('release_datetime', metadata.get('release-date', 'Unknown')),
+                          'version': metadata.get('version', ''),
                       }
                   except s3_client.exceptions.ClientError as e:
                       if e.response['Error']['Code'] != '404':
@@ -484,7 +486,7 @@ Resources:
               else:
                   return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
-          def generate_landing_page(user_email, download_urls, profile, timestamp, release_datetime, packages, detected_os=None):
+          def generate_landing_page(user_email, download_urls, profile, timestamp, release_datetime, packages, detected_os=None, version=''):
               """Generate HTML landing page with OS detection"""
 
               # Format release datetime
@@ -749,6 +751,7 @@ Resources:
                           <strong>Welcome, {user_email}</strong>
                       </div>
                       <div class="release-info">
+                          {'<div class="release-info-item"><strong>Version:</strong> ' + version + '</div>' if version else ''}
                           <div class="release-info-item">
                               <strong>Profile:</strong> {profile}
                           </div>

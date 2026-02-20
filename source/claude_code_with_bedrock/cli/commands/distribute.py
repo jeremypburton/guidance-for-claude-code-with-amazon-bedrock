@@ -565,6 +565,13 @@ class DistributeCommand(Command):
         )
         release_datetime = f"{release_date} {release_time}"
 
+        # Read version from source/VERSION for metadata
+        version_file = Path(__file__).parent.parent.parent.parent / "VERSION"
+        if version_file.exists():
+            package_version = version_file.read_text().strip()
+        else:
+            package_version = "1.0.0"
+
         # Clean up old packages in S3 to prevent stale platform packages from appearing
         s3 = boto3.client("s3", region_name=profile.aws_region)
         console.print("\n[dim]Cleaning up old packages from S3...[/dim]")
@@ -623,6 +630,7 @@ class DistributeCommand(Command):
                                 "timestamp": build_timestamp,
                                 "release_date": release_date,
                                 "release_datetime": release_datetime,
+                                "version": package_version,
                             }
                         },
                     )
@@ -636,13 +644,6 @@ class DistributeCommand(Command):
         # This ensures clients never see a version that doesn't have all binaries available
         if uploaded_count > 0:
             try:
-                # Read version from source/VERSION
-                version_file = Path(__file__).parent.parent.parent.parent / "VERSION"
-                if version_file.exists():
-                    manifest_version = version_file.read_text().strip()
-                else:
-                    manifest_version = "1.0.0"
-
                 # Build manifest with per-architecture keys
                 # Map from landing-page platform names to architecture-specific keys
                 arch_platform_map = {
@@ -675,7 +676,7 @@ class DistributeCommand(Command):
                         }
 
                 manifest = {
-                    "version": manifest_version,
+                    "version": package_version,
                     "released_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "binaries": binaries,
                 }
@@ -687,7 +688,7 @@ class DistributeCommand(Command):
                     Body=manifest_json.encode("utf-8"),
                     ContentType="application/json",
                 )
-                console.print(f"[green]✓ Uploaded latest.json manifest (version {manifest_version})[/green]")
+                console.print(f"[green]✓ Uploaded latest.json manifest (version {package_version})[/green]")
                 console.print(f"  [dim]S3: s3://{bucket_name}/packages/latest.json[/dim]")
                 console.print(f"  [dim]Platforms: {', '.join(binaries.keys())}[/dim]")
             except Exception as e:
