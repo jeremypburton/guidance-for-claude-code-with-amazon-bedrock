@@ -483,10 +483,10 @@ Use `--latest` to skip the wizard and auto-select the most recent build.
 **Platform-Specific Uploads (Landing Page):**
 
 For landing-page distribution, packages are organized by platform:
-- `packages/windows/latest.zip` - Windows package
-- `packages/linux/latest.zip` - Linux package
-- `packages/mac/latest.zip` - macOS package
-- `packages/all-platforms/latest.zip` - All platforms bundle
+- `packages/windows/claude-code-bedrock-{version}-windows.zip` - Windows package
+- `packages/linux/claude-code-bedrock-{version}-linux.zip` - Linux package
+- `packages/mac/claude-code-bedrock-{version}-mac.zip` - macOS package
+- `packages/all-platforms/claude-code-bedrock-{version}-all-platforms.zip` - All platforms bundle
 
 Landing page auto-detects user's OS and recommends appropriate package.
 

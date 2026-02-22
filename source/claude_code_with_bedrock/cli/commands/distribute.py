@@ -576,12 +576,20 @@ class DistributeCommand(Command):
         s3 = boto3.client("s3", region_name=profile.aws_region)
         console.print("\n[dim]Cleaning up old packages from S3...[/dim]")
 
-        # Delete all existing packages/*/latest.zip files
+        # Delete all existing packages for each platform (versioned and legacy)
         platforms_to_clean = ["windows", "linux", "mac", "all-platforms"]
         for platform in platforms_to_clean:
-            s3_key = f"packages/{platform}/latest.zip"
             try:
-                s3.delete_object(Bucket=bucket_name, Key=s3_key)
+                # Clean up legacy latest.zip
+                s3.delete_object(Bucket=bucket_name, Key=f"packages/{platform}/latest.zip")
+                # Clean up any existing versioned files
+                response = s3.list_objects_v2(
+                    Bucket=bucket_name,
+                    Prefix=f"packages/{platform}/claude-code-bedrock-",
+                )
+                if "Contents" in response:
+                    for obj in response["Contents"]:
+                        s3.delete_object(Bucket=bucket_name, Key=obj["Key"])
             except ClientError:
                 # Ignore errors if file doesn't exist
                 pass
@@ -617,21 +625,24 @@ class DistributeCommand(Command):
                                 rel_path = file.relative_to(package_path)
                                 zipf.write(file, f"claude-code-package/{rel_path}")
 
-                # Upload to S3 at packages/{platform}/latest.zip
-                s3_key = f"packages/{platform}/latest.zip"
+                # Upload to S3 with versioned filename
+                versioned_filename = f"claude-code-bedrock-{package_version}-{platform}.zip"
+                s3_key = f"packages/{platform}/{versioned_filename}"
                 try:
                     s3.upload_file(
                         str(zip_path),
                         bucket_name,
                         s3_key,
                         ExtraArgs={
+                            "ContentDisposition": f'attachment; filename="{versioned_filename}"',
+                            "ContentType": "application/zip",
                             "Metadata": {
                                 "profile": profile_name,
                                 "timestamp": build_timestamp,
                                 "release_date": release_date,
                                 "release_datetime": release_datetime,
                                 "version": package_version,
-                            }
+                            },
                         },
                     )
                     uploaded_count += 1
@@ -647,11 +658,11 @@ class DistributeCommand(Command):
                 # Build manifest with per-architecture keys
                 # Map from landing-page platform names to architecture-specific keys
                 arch_platform_map = {
-                    "macos-arm64": ("packages/mac/latest.zip", "credential-process-macos-arm64"),
-                    "macos-intel": ("packages/mac/latest.zip", "credential-process-macos-intel"),
-                    "linux-x64": ("packages/linux/latest.zip", "credential-process-linux-x64"),
-                    "linux-arm64": ("packages/linux/latest.zip", "credential-process-linux-arm64"),
-                    "windows": ("packages/windows/latest.zip", "credential-process-windows.exe"),
+                    "macos-arm64": (f"packages/mac/claude-code-bedrock-{package_version}-mac.zip", "credential-process-macos-arm64"),
+                    "macos-intel": (f"packages/mac/claude-code-bedrock-{package_version}-mac.zip", "credential-process-macos-intel"),
+                    "linux-x64": (f"packages/linux/claude-code-bedrock-{package_version}-linux.zip", "credential-process-linux-x64"),
+                    "linux-arm64": (f"packages/linux/claude-code-bedrock-{package_version}-linux.zip", "credential-process-linux-arm64"),
+                    "windows": (f"packages/windows/claude-code-bedrock-{package_version}-windows.zip", "credential-process-windows.exe"),
                 }
 
                 binaries = {}
