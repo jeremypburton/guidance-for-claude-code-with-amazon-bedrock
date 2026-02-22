@@ -35,6 +35,8 @@ class TestModelConfiguration:
     def test_claude_models_structure(self):
         """Test that CLAUDE_MODELS has the expected structure."""
         expected_models = {
+            "opus-4-6",
+            "opus-4-5",
             "opus-4-1",
             "opus-4",
             "sonnet-4",
@@ -56,7 +58,7 @@ class TestModelConfiguration:
     def test_model_profiles_structure(self):
         """Test that each model profile has the expected structure."""
         # Valid profile keys that can appear in model configurations
-        valid_profile_keys = set(DEFAULT_REGIONS.keys()) | {"eu", "japan", "global"}
+        valid_profile_keys = set(DEFAULT_REGIONS.keys()) | {"eu", "japan", "global", "au"}
 
         for _model_key, model_config in CLAUDE_MODELS.items():
             for profile_key, profile_config in model_config["profiles"].items():
@@ -81,6 +83,8 @@ class TestModelConfiguration:
                     assert model_id.startswith("us-gov.anthropic.")
                 elif profile_key == "japan":
                     assert model_id.startswith("jp.anthropic.")
+                elif profile_key == "au":
+                    assert model_id.startswith("au.anthropic.")
                 elif profile_key == "global":
                     assert model_id.startswith("global.anthropic.")
 
