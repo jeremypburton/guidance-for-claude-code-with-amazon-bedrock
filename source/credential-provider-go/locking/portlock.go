@@ -11,7 +11,7 @@ import (
 // TryAcquirePort tests whether the given port is available by binding to it.
 // Returns true if the port was available (and has been released).
 func TryAcquirePort(port int) bool {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", internal.ListenAddress(), port))
 	if err != nil {
 		return false
 	}

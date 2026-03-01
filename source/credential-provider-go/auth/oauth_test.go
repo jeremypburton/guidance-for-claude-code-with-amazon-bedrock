@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"credential-provider-go/provider"
 )
@@ -318,6 +319,119 @@ func TestBuildAuthURL_IncludesOfflineAccess(t *testing.T) {
 				t.Errorf("provider %s URL missing offline_access scope", name)
 			}
 		})
+	}
+}
+
+func TestStartCallbackServer_ReturnsCode(t *testing.T) {
+	t.Setenv("CCWB_BIND_ADDRESS", "127.0.0.1")
+	port := 48910
+
+	go func() {
+		// Give the server a moment to start
+		time.Sleep(50 * time.Millisecond)
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?state=test-state&code=auth-code-123", port))
+		if err != nil {
+			t.Errorf("callback request failed: %v", err)
+			return
+		}
+		resp.Body.Close()
+	}()
+
+	code, err := StartCallbackServer(port, "test-state", 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code != "auth-code-123" {
+		t.Errorf("expected code 'auth-code-123', got '%s'", code)
+	}
+}
+
+func TestStartCallbackServer_StateMismatch(t *testing.T) {
+	t.Setenv("CCWB_BIND_ADDRESS", "127.0.0.1")
+	port := 48911
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?state=wrong-state&code=auth-code", port))
+		if err != nil {
+			t.Errorf("callback request failed: %v", err)
+			return
+		}
+		resp.Body.Close()
+	}()
+
+	_, err := StartCallbackServer(port, "correct-state", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error for state mismatch")
+	}
+	if !strings.Contains(err.Error(), "invalid state") {
+		t.Errorf("expected 'invalid state' in error, got: %v", err)
+	}
+}
+
+func TestStartCallbackServer_ErrorParam(t *testing.T) {
+	t.Setenv("CCWB_BIND_ADDRESS", "127.0.0.1")
+	port := 48912
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?error=access_denied&error_description=user+denied", port))
+		if err != nil {
+			t.Errorf("callback request failed: %v", err)
+			return
+		}
+		resp.Body.Close()
+	}()
+
+	_, err := StartCallbackServer(port, "any-state", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error for error param")
+	}
+	if !strings.Contains(err.Error(), "user denied") {
+		t.Errorf("expected 'user denied' in error, got: %v", err)
+	}
+}
+
+func TestStartCallbackServer_Timeout(t *testing.T) {
+	t.Setenv("CCWB_BIND_ADDRESS", "127.0.0.1")
+	port := 48913
+
+	start := time.Now()
+	_, err := StartCallbackServer(port, "state", 500*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("expected 'timeout' in error, got: %v", err)
+	}
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("timeout too early: %v", elapsed)
+	}
+}
+
+func TestStartCallbackServer_BindAddressOverride(t *testing.T) {
+	t.Setenv("CCWB_BIND_ADDRESS", "0.0.0.0")
+	port := 48914
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		// Connect via 127.0.0.1 — should work because server is on 0.0.0.0
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?state=s1&code=c1", port))
+		if err != nil {
+			t.Errorf("callback request failed: %v", err)
+			return
+		}
+		resp.Body.Close()
+	}()
+
+	code, err := StartCallbackServer(port, "s1", 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code != "c1" {
+		t.Errorf("expected code 'c1', got '%s'", code)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -106,7 +107,7 @@ func StartCallbackServer(port int, expectedState string, timeout time.Duration) 
 		resultCh <- callbackResult{Error: "invalid state or missing code"}
 	})
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", internal.ListenAddress(), port))
 	if err != nil {
 		return "", fmt.Errorf("failed to listen on port %d: %w", port, err)
 	}
@@ -180,6 +181,10 @@ func doTokenRequest(tokenURL string, data url.Values) (*OAuthResult, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
+		if internal.IsTLSCertError(err) {
+			return nil, fmt.Errorf("token request failed: %w\n%s", err,
+				internal.TLSCertErrorGuidance("your identity provider"))
+		}
 		return nil, fmt.Errorf("token request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -258,7 +263,25 @@ func RefreshTokens(providerDomain, providerType string, providerCfg provider.Con
 }
 
 // OpenBrowser opens the system browser to the given URL.
+// On WSL, it tries wslview and powershell.exe before falling back to pkg/browser.
 func OpenBrowser(url string) error {
+	if internal.IsWSL() {
+		return openBrowserWSL(url)
+	}
+	return browser.OpenURL(url)
+}
+
+// openBrowserWSL tries WSL-specific methods to open a URL in the Windows host browser.
+func openBrowserWSL(url string) error {
+	// wslview (from wslu package) - recommended
+	if path, err := exec.LookPath("wslview"); err == nil {
+		return exec.Command(path, url).Start()
+	}
+	// powershell.exe - available via WSL interop
+	if path, err := exec.LookPath("powershell.exe"); err == nil {
+		return exec.Command(path, "-NoProfile", "-Command", "Start-Process", url).Start()
+	}
+	// Last resort: pkg/browser fallback
 	return browser.OpenURL(url)
 }
 

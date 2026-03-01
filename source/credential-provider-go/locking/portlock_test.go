@@ -55,6 +55,30 @@ func TestWaitForPort_BecomesAvailable(t *testing.T) {
 	}
 }
 
+func TestTryAcquirePort_BindAddressOverride(t *testing.T) {
+	// With 0.0.0.0 binding, TryAcquirePort should still work
+	t.Setenv("CCWB_BIND_ADDRESS", "0.0.0.0")
+	port := 48920
+	if !TryAcquirePort(port) {
+		t.Skip("port 48920 was not available")
+	}
+}
+
+func TestTryAcquirePort_InUse_WithOverride(t *testing.T) {
+	t.Setenv("CCWB_BIND_ADDRESS", "0.0.0.0")
+	// Bind on 0.0.0.0, then verify TryAcquirePort detects it as in use
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("failed to bind: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	if TryAcquirePort(port) {
+		t.Error("expected port to be in use")
+	}
+}
+
 func TestWaitForPort_Timeout(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
