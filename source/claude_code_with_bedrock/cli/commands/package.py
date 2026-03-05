@@ -816,9 +816,10 @@ cp "$CREDENTIAL_BINARY" ~/claude-code-with-bedrock/credential-process
 cp config.json ~/claude-code-with-bedrock/
 chmod +x ~/claude-code-with-bedrock/credential-process
 
-# macOS: ad-hoc codesign binaries (required on Apple Silicon, harmless on Intel)
+# macOS: remove quarantine attribute and ad-hoc codesign (required on Apple Silicon, harmless on Intel)
 if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "Signing credential-process for macOS..."
+    xattr -d com.apple.quarantine ~/claude-code-with-bedrock/credential-process 2>/dev/null || true
     codesign -s - -f ~/claude-code-with-bedrock/credential-process 2>/dev/null || true
 
     echo
@@ -868,6 +869,7 @@ if [ -f "$OTEL_BINARY" ]; then
     cp "$OTEL_BINARY" ~/claude-code-with-bedrock/otel-helper
     chmod +x ~/claude-code-with-bedrock/otel-helper
     if [[ "$OSTYPE" == "darwin"* ]]; then
+        xattr -d com.apple.quarantine ~/claude-code-with-bedrock/otel-helper 2>/dev/null || true
         codesign -s - -f ~/claude-code-with-bedrock/otel-helper 2>/dev/null || true
     fi
     echo "✓ OTEL helper installed"
@@ -992,37 +994,7 @@ echo Copying configuration...
 copy /Y "config.json" "%USERPROFILE%\\claude-code-with-bedrock\\" >nul
 
 REM Copy Claude Code settings if they exist
-if exist "claude-settings" (
-    echo Copying Claude Code telemetry settings...
-    if not exist "%USERPROFILE%\\.claude" mkdir "%USERPROFILE%\\.claude"
-
-    REM Copy settings and replace placeholders
-    if exist "claude-settings\\settings.json" (
-        set SKIP_SETTINGS=false
-        if exist "%USERPROFILE%\\.claude\\settings.json" (
-            echo Existing Claude Code settings found
-            set /p OVERWRITE="Overwrite with new settings? (y/n): "
-            if /i not "%OVERWRITE%"=="y" (
-                echo Skipping Claude Code settings...
-                set SKIP_SETTINGS=true
-            )
-        )
-
-        if not "%SKIP_SETTINGS%"=="true" (
-            REM Use PowerShell to replace placeholders
-            powershell -Command ^
-            "$otelPath = '%USERPROFILE%\\\\claude-code-with-bedrock\\\\otel-helper.exe' ^
-            -replace '\\\\\\\\', '/'; ^
-            $credPath = '%USERPROFILE%\\\\claude-code-with-bedrock\\\\credential-process.exe' ^
-            -replace '\\\\\\\\', '/'; ^
-            (Get-Content 'claude-settings\\\\settings.json') ^
-            -replace '__OTEL_HELPER_PATH__', $otelPath ^
-            -replace '__CREDENTIAL_PROCESS_PATH__', $credPath | ^
-            Set-Content '%USERPROFILE%\\\\.claude\\\\settings.json'"
-            echo OK Claude Code settings configured
-        )
-    )
-)
+if exist "claude-settings" if exist "claude-settings\\settings.json" call :configure_settings
 
 REM Configure AWS profiles
 echo.
@@ -1030,17 +1002,49 @@ echo Configuring AWS profiles...
 if not exist "%USERPROFILE%\\.aws" mkdir "%USERPROFILE%\\.aws"
 
 REM Write profiles directly to AWS config file (no AWS CLI dependency)
-powershell -Command ^
-"$config = Get-Content config.json | ConvertFrom-Json; ^
-$awsConfigPath = Join-Path $env:USERPROFILE '.aws\\config'; ^
-foreach ($p in $config.PSObject.Properties.Name) {{ ^
-    $region = $config.$p.aws_region; ^
-    if (-not $region) {{ $region = '{profile.aws_region}' }}; ^
-    $credProcess = Join-Path $env:USERPROFILE 'claude-code-with-bedrock\\credential-process.exe'; ^
-    $block = \\\"`n[profile $p]`ncredential_process = $credProcess --profile $p`nregion = $region`n\\\"; ^
-    Add-Content -Path $awsConfigPath -Value $block; ^
-    Write-Host \\\"  OK Created AWS profile '$p'\\\" ^
-}}"
+powershell -Command "$config = Get-Content config.json | ConvertFrom-Json; $awsConfigPath = Join-Path $env:USERPROFILE '.aws\\config'; foreach ($p in $config.PSObject.Properties.Name) {{ $region = $config.$p.aws_region; if (-not $region) {{ $region = '{profile.aws_region}' }}; $credProcess = Join-Path $env:USERPROFILE 'claude-code-with-bedrock\\credential-process.exe'; $block = \\\"`n[profile $p]`ncredential_process = $credProcess --profile $p`nregion = $region`n\\\"; Add-Content -Path $awsConfigPath -Value $block; Write-Host \\\"  OK Created AWS profile '$p'\\\" }}"
+
+REM Detect SSL inspection proxy certificates (Netskope, Zscaler, etc.)
+REM Node.js (used by Claude Code) does not read the Windows certificate store,
+REM so NODE_EXTRA_CA_CERTS must be set for HTTPS to work behind corporate proxies.
+echo.
+echo Checking for SSL inspection proxy certificates...
+set "PROXY_CERT_FOUND="
+
+REM Check Netskope certificate locations
+for %%C in (
+    "%ProgramData%\\netskope\\stagent\\data\\nscacert.pem"
+    "%ProgramData%\\netskope\\stagent\\data\\netskope-cert-bundle.pem"
+    "%ProgramData%\\Netskope\\STAgent\\data\\nscacert.pem"
+    "%ProgramData%\\Zscaler\\ZscalerRootCerts\\ZscalerRootCertificate-2048-SHA256.crt"
+) do (
+    if exist %%C (
+        if not defined PROXY_CERT_FOUND (
+            set "PROXY_CERT_FOUND=%%~C"
+        )
+    )
+)
+
+REM If no certificate files found on disk, try extracting from Windows certificate store
+if not defined PROXY_CERT_FOUND call :export_proxy_cert
+
+if defined PROXY_CERT_FOUND (
+    echo   Found proxy CA certificate: %PROXY_CERT_FOUND%
+    echo   Configuring NODE_EXTRA_CA_CERTS for Claude Code...
+    setx NODE_EXTRA_CA_CERTS "%PROXY_CERT_FOUND%" >nul 2>&1
+    if %errorlevel% equ 0 (
+        set "NODE_EXTRA_CA_CERTS=%PROXY_CERT_FOUND%"
+        echo   OK NODE_EXTRA_CA_CERTS set for current user
+        echo.
+        echo   NOTE: You must restart your terminal for this to take effect.
+    ) else (
+        echo   WARNING: Could not set NODE_EXTRA_CA_CERTS automatically.
+        echo   Please set it manually:
+        echo     setx NODE_EXTRA_CA_CERTS "%PROXY_CERT_FOUND%"
+    )
+) else (
+    echo   No proxy CA certificates detected (checked files and certificate store)
+)
 
 echo.
 echo ======================================
@@ -1061,7 +1065,51 @@ for /f %%p in ('powershell -Command ^
 echo.
 echo This will open your browser for authentication and print credentials on success.
 echo.
+if not defined PROXY_CERT_FOUND (
+    echo NOTE: If you are behind a corporate SSL proxy (Netskope, Zscaler, etc.)
+    echo and encounter TLS certificate errors, you may need to set:
+    echo   setx NODE_EXTRA_CA_CERTS "C:\\path\\to\\proxy-ca-cert.pem"
+    echo Ask your IT team for the proxy CA certificate file location.
+    echo.
+)
 pause
+goto :eof
+
+:export_proxy_cert
+echo   Certificate files not directly accessible, checking Windows certificate store...
+powershell -Command "$cert = Get-ChildItem Cert:\\LocalMachine\\Root -EA SilentlyContinue | ? {{ $_.Subject -like '*Netskope*' -or $_.Issuer -like '*Netskope*' }} | select -First 1; if (!$cert) {{ $cert = Get-ChildItem Cert:\\CurrentUser\\Root -EA SilentlyContinue | ? {{ $_.Subject -like '*Netskope*' -or $_.Issuer -like '*Netskope*' }} | select -First 1 }}; if (!$cert) {{ $cert = Get-ChildItem Cert:\\LocalMachine\\Root -EA SilentlyContinue | ? {{ $_.Subject -like '*Zscaler*' -or $_.Issuer -like '*Zscaler*' }} | select -First 1 }}; if (!$cert) {{ $cert = Get-ChildItem Cert:\\CurrentUser\\Root -EA SilentlyContinue | ? {{ $_.Subject -like '*Zscaler*' -or $_.Issuer -like '*Zscaler*' }} | select -First 1 }}; if ($cert) {{ $p = Join-Path $env:USERPROFILE 'claude-code-with-bedrock\\proxy-ca-cert.pem'; $pem = '-----BEGIN CERTIFICATE-----' + [Environment]::NewLine + [Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks') + [Environment]::NewLine + '-----END CERTIFICATE-----'; Set-Content $p $pem -Encoding ASCII }}"
+if exist "%USERPROFILE%\\claude-code-with-bedrock\\proxy-ca-cert.pem" (
+    set "PROXY_CERT_FOUND=%USERPROFILE%\\claude-code-with-bedrock\\proxy-ca-cert.pem"
+    echo   Exported proxy CA certificate from Windows certificate store
+)
+goto :eof
+
+:configure_settings
+echo Configuring Claude Code settings for Bedrock...
+if not exist "%USERPROFILE%\\.claude" mkdir "%USERPROFILE%\\.claude"
+if not exist "%USERPROFILE%\\.claude\\settings.json" goto :do_configure_settings
+echo Existing Claude Code settings found
+set /p OVERWRITE=Overwrite with new settings? (y/n):
+if /i "%OVERWRITE%"=="y" goto :do_configure_settings
+echo Skipping Claude Code settings...
+goto :eof
+
+:do_configure_settings
+powershell -Command "$otelPath = '%USERPROFILE%\\\\claude-code-with-bedrock\\\\otel-helper.exe' -replace '\\\\\\\\', '/'; $credPath = '%USERPROFILE%\\\\claude-code-with-bedrock\\\\credential-process.exe' -replace '\\\\\\\\', '/'; (Get-Content 'claude-settings\\\\settings.json') -replace '__OTEL_HELPER_PATH__', $otelPath -replace '__CREDENTIAL_PROCESS_PATH__', $credPath | Set-Content '%USERPROFILE%\\\\.claude\\\\settings.json'"
+echo OK Claude Code settings configured
+REM Set CLAUDE_CODE_USE_BEDROCK as a persistent user environment variable so that
+REM Claude Code detects Bedrock mode on first launch, before reading settings.json.
+REM Without this, Claude Code's onboarding wizard prompts for provider selection.
+setx CLAUDE_CODE_USE_BEDROCK 1 >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    set "CLAUDE_CODE_USE_BEDROCK=1"
+    echo   OK CLAUDE_CODE_USE_BEDROCK set for current user
+) else (
+    echo   WARNING: Could not set CLAUDE_CODE_USE_BEDROCK automatically.
+    echo   Please set it manually:
+    echo     setx CLAUDE_CODE_USE_BEDROCK 1
+)
+goto :eof
 """
 
         installer_path = output_dir / "install.bat"
