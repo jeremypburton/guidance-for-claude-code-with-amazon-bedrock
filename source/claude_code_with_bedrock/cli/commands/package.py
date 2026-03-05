@@ -1030,17 +1030,21 @@ if not defined PROXY_CERT_FOUND call :export_proxy_cert
 
 if defined PROXY_CERT_FOUND (
     echo   Found proxy CA certificate: %PROXY_CERT_FOUND%
-    echo   Configuring NODE_EXTRA_CA_CERTS for Claude Code...
+    echo   Configuring NODE_EXTRA_CA_CERTS and SSL_CERT_FILE for Claude Code...
     setx NODE_EXTRA_CA_CERTS "%PROXY_CERT_FOUND%" >nul 2>&1
+    setx SSL_CERT_FILE "%PROXY_CERT_FOUND%" >nul 2>&1
     if %errorlevel% equ 0 (
         set "NODE_EXTRA_CA_CERTS=%PROXY_CERT_FOUND%"
+        set "SSL_CERT_FILE=%PROXY_CERT_FOUND%"
         echo   OK NODE_EXTRA_CA_CERTS set for current user
+        echo   OK SSL_CERT_FILE set for current user
         echo.
         echo   NOTE: You must restart your terminal for this to take effect.
     ) else (
-        echo   WARNING: Could not set NODE_EXTRA_CA_CERTS automatically.
-        echo   Please set it manually:
+        echo   WARNING: Could not set environment variables automatically.
+        echo   Please set them manually:
         echo     setx NODE_EXTRA_CA_CERTS "%PROXY_CERT_FOUND%"
+        echo     setx SSL_CERT_FILE "%PROXY_CERT_FOUND%"
     )
 ) else (
     echo   No proxy CA certificates detected (checked files and certificate store)
@@ -1052,14 +1056,12 @@ echo Installation complete!
 echo ======================================
 echo.
 echo Available profiles:
-for /f %%p in ('powershell -Command ^
-"$config = Get-Content config.json | ConvertFrom-Json; $config.PSObject.Properties.Name"') do (
+for /f %%p in ('powershell -Command "$config = Get-Content config.json ^| ConvertFrom-Json; $config.PSObject.Properties.Name"') do (
     echo   - %%p
 )
 echo.
 echo To verify authentication, run:
-for /f %%p in ('powershell -Command ^
-"$config = Get-Content config.json | ConvertFrom-Json; $config.PSObject.Properties.Name | Select-Object -First 1"') do (
+for /f %%p in ('powershell -Command "$config = Get-Content config.json ^| ConvertFrom-Json; $config.PSObject.Properties.Name ^| Select-Object -First 1"') do (
     echo   %USERPROFILE%\\claude-code-with-bedrock\\credential-process.exe --profile %%p
 )
 echo.
@@ -1069,6 +1071,7 @@ if not defined PROXY_CERT_FOUND (
     echo NOTE: If you are behind a corporate SSL proxy (Netskope, Zscaler, etc.)
     echo and encounter TLS certificate errors, you may need to set:
     echo   setx NODE_EXTRA_CA_CERTS "C:\\path\\to\\proxy-ca-cert.pem"
+    echo   setx SSL_CERT_FILE "C:\\path\\to\\proxy-ca-cert.pem"
     echo Ask your IT team for the proxy CA certificate file location.
     echo.
 )
@@ -1095,7 +1098,7 @@ echo Skipping Claude Code settings...
 goto :eof
 
 :do_configure_settings
-powershell -Command "$otelPath = '%USERPROFILE%\\\\claude-code-with-bedrock\\\\otel-helper.exe' -replace '\\\\\\\\', '/'; $credPath = '%USERPROFILE%\\\\claude-code-with-bedrock\\\\credential-process.exe' -replace '\\\\\\\\', '/'; (Get-Content 'claude-settings\\\\settings.json') -replace '__OTEL_HELPER_PATH__', $otelPath -replace '__CREDENTIAL_PROCESS_PATH__', $credPath | Set-Content '%USERPROFILE%\\\\.claude\\\\settings.json'"
+powershell -Command "$otelPath = '%USERPROFILE%\\claude-code-with-bedrock\\otel-helper.exe' -replace '\\\\', '/'; $credPath = '%USERPROFILE%\\claude-code-with-bedrock\\credential-process.exe' -replace '\\\\', '/'; (Get-Content 'claude-settings\\settings.json') -replace '__OTEL_HELPER_PATH__', $otelPath -replace '__CREDENTIAL_PROCESS_PATH__', $credPath | Set-Content '%USERPROFILE%\\.claude\\settings.json'"
 echo OK Claude Code settings configured
 REM Set CLAUDE_CODE_USE_BEDROCK as a persistent user environment variable so that
 REM Claude Code detects Bedrock mode on first launch, before reading settings.json.
