@@ -33,21 +33,34 @@ func getTokenViaCredentialProcess() string {
 		return ""
 	}
 
-	profile := os.Getenv("AWS_PROFILE")
+	// Use same profile resolution order as credential-process:
+	// CCWB_PROFILE > AWS_PROFILE > let credential-process auto-detect
+	profile := os.Getenv("CCWB_PROFILE")
 	if profile == "" {
-		profile = "ClaudeCode"
+		profile = os.Getenv("AWS_PROFILE")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, credentialProcess, "--profile", profile, "--get-monitoring-token")
+	args := []string{"--get-monitoring-token"}
+	if profile != "" {
+		args = append([]string{"--profile", profile}, args...)
+	}
+	cmd := exec.CommandContext(ctx, credentialProcess, args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	output, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			logWarning("Credential process timed out")
 		} else {
-			logWarning("Failed to get token via credential-process: %v", err)
+			errMsg := strings.TrimSpace(stderr.String())
+			if errMsg != "" {
+				logWarning("Failed to get token via credential-process: %s", errMsg)
+			} else {
+				logWarning("Failed to get token via credential-process: %v", err)
+			}
 		}
 		return ""
 	}
