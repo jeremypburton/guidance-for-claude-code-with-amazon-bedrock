@@ -277,9 +277,13 @@ func openBrowserWSL(url string) error {
 	if path, err := exec.LookPath("wslview"); err == nil {
 		return exec.Command(path, url).Start()
 	}
+	// rundll32.exe - opens URLs via Windows shell API, no command-line interpretation issues
+	if path, err := exec.LookPath("rundll32.exe"); err == nil {
+		return exec.Command(path, "url.dll,FileProtocolHandler", url).Start()
+	}
 	// powershell.exe - available via WSL interop
 	if path, err := exec.LookPath("powershell.exe"); err == nil {
-		return exec.Command(path, "-NoProfile", "-Command", "Start-Process", url).Start()
+		return exec.Command(path, "-NoProfile", "-Command", "Start-Process", "'"+url+"'").Start()
 	}
 	// Last resort: pkg/browser fallback
 	return browser.OpenURL(url)

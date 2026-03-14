@@ -426,11 +426,12 @@ func performOIDCAuth(cfg *config.ProfileConfig, providerType string, providerCfg
 	}()
 
 	// Open browser
-	internal.DebugPrint("Opening browser for %s authentication...", providerCfg.Name)
-	internal.DebugPrint("If browser doesn't open, visit: %s", authURL)
+	fmt.Fprintf(os.Stderr, "Opening browser for authentication...\n")
 	if err := auth.OpenBrowser(authURL); err != nil {
 		internal.DebugPrint("Failed to open browser: %v", err)
+		fmt.Fprintf(os.Stderr, "Could not open browser automatically.\n")
 	}
+	fmt.Fprintf(os.Stderr, "If the browser doesn't open, visit:\n  %s\n", authURL)
 
 	// Wait for callback
 	res := <-resultCh

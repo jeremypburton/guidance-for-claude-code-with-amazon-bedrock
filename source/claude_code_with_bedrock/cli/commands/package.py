@@ -792,6 +792,13 @@ else
     exit 1
 fi
 
+# Detect WSL environment
+IS_WSL=false
+if [[ "$PLATFORM" == "linux" ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+    IS_WSL=true
+    echo "  (running inside WSL)"
+fi
+
 # Check if binary for platform exists
 CREDENTIAL_BINARY="credential-process-$BINARY_SUFFIX"
 OTEL_BINARY="otel-helper-$BINARY_SUFFIX"
@@ -925,6 +932,54 @@ region = $PROFILE_REGION
 EOF
     echo "  ✓ Created AWS profile '$PROFILE_NAME'"
 done
+
+if [[ "$IS_WSL" == "true" ]]; then
+    echo
+    echo "WSL environment detected - checking browser launch capabilities..."
+    WSL_BROWSER_OK=false
+
+    # Check 1: WSL interop (required for cmd.exe/powershell.exe)
+    if [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+        echo "  ✓ WSL interop is enabled"
+    else
+        echo "  ⚠ WSL interop is disabled — cmd.exe/powershell.exe won't work"
+        echo "    Enable it: sudo bash -c 'echo 1 > /proc/sys/fs/binfmt_misc/WSLInterop'"
+    fi
+
+    # Check 2: wslview (best method, from wslu package)
+    if command -v wslview &>/dev/null; then
+        echo "  ✓ wslview found (recommended)"
+        WSL_BROWSER_OK=true
+    else
+        echo "  ✗ wslview not found"
+    fi
+
+    # Check 3: rundll32.exe (Windows shell URL handler)
+    if command -v rundll32.exe &>/dev/null; then
+        echo "  ✓ rundll32.exe found"
+        WSL_BROWSER_OK=true
+    else
+        echo "  ✗ rundll32.exe not on PATH"
+    fi
+
+    # Check 4: powershell.exe (another fallback)
+    if command -v powershell.exe &>/dev/null; then
+        echo "  ✓ powershell.exe found"
+        WSL_BROWSER_OK=true
+    else
+        echo "  ✗ powershell.exe not on PATH"
+    fi
+
+    if [[ "$WSL_BROWSER_OK" == "false" ]]; then
+        echo
+        echo "  ⚠ No browser launch method available!"
+        echo "    Install wslu (recommended): sudo apt install wslu"
+        echo "    Or ensure WSL interop is enabled so cmd.exe is on your PATH."
+        echo
+        echo "    Without this, you'll need to manually copy the auth URL into"
+        echo "    your Windows browser when authenticating."
+    fi
+fi
 
 echo
 echo "======================================"
