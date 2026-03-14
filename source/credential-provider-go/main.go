@@ -127,6 +127,7 @@ func run() int {
 		token := monitoring.GetMonitoringToken(profile)
 		if token != "" {
 			fmt.Println(token)
+			update.TryCheckAndSpawn(cfg, getVersion(), cachedCredentialMap(profile))
 			return 0
 		}
 		// No cached token, trigger authentication
@@ -137,6 +138,7 @@ func run() int {
 		}
 		if token != "" {
 			fmt.Println(token)
+			update.TryCheckAndSpawn(cfg, getVersion(), cachedCredentialMap(profile))
 			return 0
 		}
 		return 1
@@ -330,6 +332,13 @@ func credentialMap(creds *credentials.AWSCredentialOutput) map[string]interface{
 		"SessionToken":    creds.SessionToken,
 		"Expiration":      creds.Expiration,
 	}
+}
+
+// cachedCredentialMap loads cached credentials from the credentials file and returns them as a map.
+// Used by paths (like --get-monitoring-token) that don't produce AWS credentials directly.
+func cachedCredentialMap(profile string) map[string]interface{} {
+	cached := credentials.GetCachedCredentials(profile)
+	return credentialMap(cached)
 }
 
 func authenticateForMonitoring(cfg *config.ProfileConfig, profile, providerType string, providerCfg provider.Config) (string, int) {
